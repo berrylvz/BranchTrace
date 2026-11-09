@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.pnpm-store/
+.rustup/
+.backend-check/
+.cargo/
+
+# Rust/Tauri build output
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Local databases and logs
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
