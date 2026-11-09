@@ -41,9 +41,12 @@ Linux 构建需要 Tauri 2 的系统依赖，包括 WebKitGTK、GTK 3 和 librsv
 ```bash
 ./node_modules/.bin/tsc
 ./node_modules/.bin/vite build
+node --test tests/*.test.mjs
 cd src-tauri
 cargo fmt --all -- --check
 cargo test
 ```
+
+移动位置选择器的回归测试使用 Node.js 24 内置的 TypeScript 支持，无需额外测试依赖。
 
 核心需求与验收边界见 `docs/01_MVP_需求规格.md`，API 契约见 `docs/03_Rust_API_设计.md`，开发阶段与交付出口见 `docs/develop-plan.md`。
