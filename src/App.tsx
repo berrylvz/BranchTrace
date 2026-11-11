@@ -5,6 +5,8 @@ import { api } from './api'
 import { ActionMenu, ConfirmDialog, errorMessage, FormDialog, LoadError, Modal } from './components/ui'
 import type { ActionRunner } from './components/ui'
 import { createMoveOptions } from './project-options'
+import { createProjectTree, MAX_TREE_INDENT, TREE_INDENT } from './project-tree'
+import type { ProjectTreeRow } from './project-tree'
 import type { DailyDayDto, DailyWeekDto, ProjectDailyItem, ProjectDetailDto, ProjectDto, ReminderDailyItem, ThemeMode, TrashEntryDto } from './types'
 import './index.css'
 
@@ -124,12 +126,8 @@ function AppShell() {
 
 function ProjectView({ projects, loading, busy, today, onAction, onOpenDetail, onOpenCalendar }: { projects: ProjectDto[]; loading: boolean; busy: boolean; today: string; onAction: ActionRunner; onOpenDetail: (id: string) => void; onOpenCalendar: (id: string) => void }) {
   const [newTitle, setNewTitle] = useState('')
-  const grouped = useMemo(() => {
-    const map = new Map<string | null, ProjectDto[]>()
-    for (const project of projects) map.set(project.parentId, [...(map.get(project.parentId) ?? []), project])
-    for (const items of map.values()) items.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
-    return map
-  }, [projects])
+  const { grouped, rows, hasBranches } = useMemo(() => createProjectTree(projects), [projects])
+  const treeMinWidth = 320 + rows.reduce((width, row) => Math.max(width, Math.min(row.depth, MAX_TREE_INDENT) * TREE_INDENT + (row.depth > MAX_TREE_INDENT ? 72 : 0)), 0)
 
   const reorder = async (parentId: string | null, fromId: string, toId: string) => {
     if (busy) return
@@ -148,28 +146,30 @@ function ProjectView({ projects, loading, busy, today, onAction, onOpenDetail, o
     if (result.ok) setNewTitle('')
   }
 
-  const renderChildren = (parentId: string | null, depth = 0): ReactNode[] => (grouped.get(parentId) ?? []).flatMap((project) => [
-    <ProjectRow key={project.id} project={project} projects={projects} depth={depth} hasChildren={Boolean(grouped.get(project.id)?.length)} busy={busy} today={today} onAction={onAction} onOpenDetail={onOpenDetail} onOpenCalendar={onOpenCalendar} onReorder={reorder} />,
-    ...(project.isExpanded ? renderChildren(project.id, depth + 1) : []),
-  ])
-
   return <section className="view-stack" aria-label="项目">
     <div className="page-toolbar">
-      <div className="page-title"><h1>项目</h1><span className="count-label">{projects.length}</span></div>
+      <div className="page-title project-page-title"><h1>项目</h1><span className="count-label">{projects.length}</span>
+        <div className="tree-controls" role="group" aria-label="项目树展开操作">
+          <button type="button" className="secondary-button" disabled={busy || loading || !hasBranches} onClick={() => void onAction(() => api.setAllProjectsExpanded(true), '已全部展开')}>全部展开</button>
+          <button type="button" className="secondary-button" disabled={busy || loading || !hasBranches} onClick={() => void onAction(() => api.setAllProjectsExpanded(false), '已全部折叠')}>全部折叠</button>
+        </div>
+      </div>
       <form className="create-bar" onSubmit={(event) => { event.preventDefault(); void createRoot() }}>
         <input value={newTitle} disabled={busy || loading} onChange={(event) => setNewTitle(event.target.value)} placeholder="新建项目…" aria-label="新建顶层项目" />
         <button type="submit" className="primary-button" disabled={busy || loading || !newTitle.trim()}>添加</button>
       </form>
     </div>
     <div className="project-list card" aria-busy={busy || loading}>
-      {loading ? <div className="loading-state">正在读取项目…</div> : projects.length ? renderChildren(null) : <EmptyState>还没有项目，在上方添加一个。</EmptyState>}
+      {loading ? <div className="loading-state">正在读取项目…</div> : projects.length ? <div className="project-tree" role="list" aria-label="项目树" style={{ minWidth: `${treeMinWidth}px` }}>{rows.map((row) => <ProjectRow key={row.project.id} row={row} projects={projects} busy={busy} today={today} onAction={onAction} onOpenDetail={onOpenDetail} onOpenCalendar={onOpenCalendar} onReorder={reorder} />)}</div> : <EmptyState>还没有项目，在上方添加一个。</EmptyState>}
     </div>
   </section>
 }
 
 type ProjectDialog = 'rename' | 'child' | 'terminal' | 'move' | 'trash'
 
-function ProjectRow({ project, projects, depth, hasChildren, busy, today, onAction, onOpenDetail, onOpenCalendar, onReorder }: { project: ProjectDto; projects: ProjectDto[]; depth: number; hasChildren: boolean; busy: boolean; today: string; onAction: ActionRunner; onOpenDetail: (id: string) => void; onOpenCalendar: (id: string) => void; onReorder: (parentId: string | null, fromId: string, toId: string) => Promise<void> }) {
+function ProjectRow({ row, projects, busy, today, onAction, onOpenDetail, onOpenCalendar, onReorder }: { row: ProjectTreeRow; projects: ProjectDto[]; busy: boolean; today: string; onAction: ActionRunner; onOpenDetail: (id: string) => void; onOpenCalendar: (id: string) => void; onReorder: (parentId: string | null, fromId: string, toId: string) => Promise<void> }) {
+  const { project, depth, hasChildren, isLastSibling, continuationDepths } = row
+  const indent = Math.min(depth, MAX_TREE_INDENT)
   const [dialog, setDialog] = useState<ProjectDialog | null>(null)
   const clickTimer = useRef<number>()
   useEffect(() => () => window.clearTimeout(clickTimer.current), [])
@@ -196,24 +196,35 @@ function ProjectRow({ project, projects, depth, hasChildren, busy, today, onActi
     { label: '移入回收站', separator: true, danger: true, onSelect: () => setDialog('trash') },
   ]
 
-  return <div className="project-row-wrap">
-    <div className={`project-row ${project.status}`} style={{ paddingLeft: `${8 + Math.min(depth, 12) * 18}px` }} onDragOver={(event) => { if (!busy && event.dataTransfer.types.includes('text/branchtrace-project')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }} onDrop={(event) => { event.preventDefault(); if (busy) return; const fromId = event.dataTransfer.getData('text/branchtrace-project'); if (fromId) void onReorder(project.parentId, fromId, project.id) }}>
+  return <div className="project-row-wrap" role="listitem" aria-level={depth + 1}>
+    <div className={`project-row ${project.status} ${depth === 0 ? 'project-root' : ''}`} onDragOver={(event) => { if (!busy && event.dataTransfer.types.includes('text/branchtrace-project')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }} onDrop={(event) => { event.preventDefault(); if (busy) return; const fromId = event.dataTransfer.getData('text/branchtrace-project'); if (fromId) void onReorder(project.parentId, fromId, project.id) }}>
       <button type="button" className="drag-handle" aria-label={`拖动排序 ${project.title}`} title="拖动排序" draggable={!busy} disabled={busy} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/branchtrace-project', project.id) }}>⠿</button>
-      {hasChildren ? <button type="button" className="tree-toggle" disabled={busy} aria-label={`${project.isExpanded ? '折叠' : '展开'} ${project.title}`} aria-expanded={project.isExpanded} onClick={() => void onAction(() => api.setProjectExpanded(project.id, !project.isExpanded))}>{project.isExpanded ? '⌄' : '›'}</button> : <span className="tree-spacer" />}
+      <span className="tree-prefix" style={{ width: `${16 + indent * TREE_INDENT}px` }}>
+        <span className="tree-guides" aria-hidden="true">
+          {continuationDepths.map((level) => <span key={level} className="tree-guide-continuation" style={{ left: `${8 + level * TREE_INDENT}px` }} />)}
+          {depth > 0 && depth <= MAX_TREE_INDENT && <span className={`tree-guide-branch ${isLastSibling ? 'last' : ''}`} style={{ left: `${8 + (depth - 1) * TREE_INDENT}px`, width: `${hasChildren ? TREE_INDENT - 8 : TREE_INDENT + 8}px` }} />}
+          {hasChildren && project.isExpanded && depth < MAX_TREE_INDENT && <span className="tree-guide-down" style={{ left: `${8 + indent * TREE_INDENT}px` }} />}
+        </span>
+        {hasChildren ? <button type="button" className="tree-toggle" disabled={busy} aria-label={`${project.isExpanded ? '折叠' : '展开'} ${project.title}`} aria-expanded={project.isExpanded} onClick={() => void onAction(() => api.setProjectExpanded(project.id, !project.isExpanded))}>{project.isExpanded ? '⌄' : '›'}</button> : <span className="tree-spacer" />}
+      </span>
       <span className={`status-dot ${project.status}`} role="img" aria-label={`状态：${statusText[project.status]}`} title={statusText[project.status]} />
-      <button type="button" className="project-title" title={project.title} disabled={busy} onClick={(event) => {
-        window.clearTimeout(clickTimer.current)
-        if (event.detail === 0) onOpenDetail(project.id)
-        else if (event.detail === 1) clickTimer.current = window.setTimeout(() => onOpenDetail(project.id), 220)
-      }} onDoubleClick={() => { window.clearTimeout(clickTimer.current); setDialog('rename') }}>{project.title}</button>
-      {depth > 12 && <span className="depth-label">第 {depth + 1} 级</span>}
-      <div className="progress-history" aria-label={`累计推进 ${project.progressCount} 天`}>
-        <span className="progress-dates">{project.recentProgressDates.map((date) => <time key={date} dateTime={date}>{date.slice(5).replace('-', '/')}</time>)}{project.progressCount > 3 && <span>+{project.progressCount - 3}</span>}</span>
-        {project.progressCount > 0 && <span className="progress-total">{project.progressCount} 天</span>}
+      <div className="project-main">
+        <button type="button" className="project-title" title={project.title} disabled={busy} onClick={(event) => {
+          window.clearTimeout(clickTimer.current)
+          if (event.detail === 0) onOpenDetail(project.id)
+          else if (event.detail === 1) clickTimer.current = window.setTimeout(() => onOpenDetail(project.id), 220)
+        }} onDoubleClick={() => { window.clearTimeout(clickTimer.current); setDialog('rename') }}>{project.title}</button>
+        <button type="button" className={`progress-button ${project.progressedToday ? 'checked' : ''}`} disabled={busy || project.status !== 'active'} aria-pressed={project.progressedToday} onClick={() => void onAction(() => api.setProjectProgress(project.id, undefined, !project.progressedToday, project.version), project.progressedToday ? '已撤销今日推进' : '已记录今日推进')} title={project.status === 'active' ? (project.progressedToday ? '撤销今日推进' : '记录今日推进') : '终止项目可在推进日历中撤销已有记录'}>{project.progressedToday ? '✓ 已推进' : '＋ 今日推进'}</button>
+        <button type="button" className="icon-button add-child-button" disabled={busy} aria-label={`为 ${project.title} 新建子项目`} title="新建子项目" onClick={() => setDialog('child')}>＋</button>
       </div>
-      <button type="button" className={`progress-button ${project.progressedToday ? 'checked' : ''}`} disabled={busy || project.status !== 'active'} aria-pressed={project.progressedToday} onClick={() => void onAction(() => api.setProjectProgress(project.id, undefined, !project.progressedToday, project.version), project.progressedToday ? '已撤销今日推进' : '已记录今日推进')} title={project.status === 'active' ? (project.progressedToday ? '撤销今日推进' : '记录今日推进') : '终止项目可在推进日历中撤销已有记录'}>{project.progressedToday ? '✓ 已推进' : '＋ 今日推进'}</button>
-      <button type="button" className="icon-button add-child-button" disabled={busy} aria-label={`为 ${project.title} 新建子项目`} title="新建子项目" onClick={() => setDialog('child')}>＋</button>
-      <ActionMenu label={`${project.title} 更多操作`} items={menuItems} disabled={busy} />
+      <div className="project-tail">
+        {depth > MAX_TREE_INDENT && <span className="depth-label">第 {depth + 1} 级</span>}
+        <div className="progress-history" aria-label={`累计推进 ${project.progressCount} 天`}>
+          <span className="progress-dates">{project.recentProgressDates.map((date) => <time key={date} dateTime={date}>{date.slice(5).replace('-', '/')}</time>)}{project.progressCount > 3 && <span>+{project.progressCount - 3}</span>}</span>
+          {project.progressCount > 0 && <span className="progress-total">{project.progressCount} 天</span>}
+        </div>
+        <ActionMenu label={`${project.title} 更多操作`} items={menuItems} disabled={busy} />
+      </div>
     </div>
 
     {dialog === 'rename' && <FormDialog title="重命名项目" label="项目名称" initialValue={project.title} onClose={close} onSubmit={(value) => onAction(() => api.renameProject(project.id, value, project.version), '项目已重命名')} />}

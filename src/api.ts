@@ -62,8 +62,10 @@ function getMockState(): MockState {
   return mockState
 }
 
-function saveMockState() {
-  if (mockState) localStorage.setItem('branchtrace-mock', JSON.stringify(mockState))
+function saveMockState(state = mockState) {
+  if (!state) return
+  localStorage.setItem('branchtrace-mock', JSON.stringify(state))
+  mockState = state
 }
 
 function nextOrder(items: { sortOrder: number }[]) {
@@ -213,6 +215,13 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       saveMockState()
       return projectDto(project) as T
     }
+    case 'set_all_projects_expanded': {
+      const projects = state.projects.map((project) => mockProjectIsTrashed(project, state) ? project : { ...project, isExpanded: Boolean(args.isExpanded) })
+      // Commit memory only after persistence succeeds, matching the native transaction.
+      const nextState = { ...state, projects }
+      saveMockState(nextState)
+      return projects.filter((project) => !mockProjectIsTrashed(project, nextState)).map(projectDto) as T
+    }
     case 'reorder_project_siblings': {
       const parentId = args.parentId ? String(args.parentId) : null
       const orderedIds = Array.isArray(args.orderedIds) ? args.orderedIds.map(String) : []
@@ -228,13 +237,16 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       if (!project) throw new Error('项目不存在')
       if (project.version !== Number(args.expectedVersion)) fail('数据已变化，请刷新')
       const date = args.date ? String(args.date) : dateToday()
-      const dates = state.progress[project.id] ?? []
+      const dates = [...(state.progress[project.id] ?? [])]
       const present = Boolean(args.present)
       if (present && !dates.includes(date)) dates.push(date)
-      if (!present) state.progress[project.id] = dates.filter((item) => item !== date)
-      project.version += 1
-      saveMockState()
-      return projectDto(project) as T
+      const updated = { ...project, version: project.version + 1 }
+      saveMockState({
+        ...state,
+        projects: state.projects.map((item) => item.id === project.id ? updated : item),
+        progress: { ...state.progress, [project.id]: present ? dates : dates.filter((item) => item !== date) },
+      })
+      return projectDto(updated) as T
     }
     case 'complete_project':
     case 'cancel_project':
@@ -407,6 +419,7 @@ export const api = {
   createProject: (title: string, parentId?: string | null) => call<ProjectDto>('create_project', { title, parentId }),
   renameProject: (projectId: string, title: string, expectedVersion: number) => call<ProjectDto>('rename_project', { projectId, title, expectedVersion }),
   setProjectExpanded: (projectId: string, isExpanded: boolean) => call<ProjectDto>('set_project_expanded', { projectId, isExpanded }),
+  setAllProjectsExpanded: (isExpanded: boolean) => call<ProjectDto[]>('set_all_projects_expanded', { isExpanded }),
   reorderProjectSiblings: (parentId: string | null, orderedIds: string[]) => call<ProjectDto[]>('reorder_project_siblings', { parentId, orderedIds }),
   moveProject: (projectId: string, targetParentId: string | null, expectedVersion: number) => call<ProjectDto>('move_project', { projectId, targetParentId, expectedVersion }),
   setProjectProgress: (projectId: string, date: string | undefined, present: boolean, expectedVersion: number) => call<ProjectDto>('set_project_progress', { projectId, date, present, expectedVersion }),

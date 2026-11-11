@@ -115,6 +115,17 @@ async fn set_project_expanded(
 }
 
 #[tauri::command]
+async fn set_all_projects_expanded(
+    state: tauri::State<'_, AppState>,
+    is_expanded: bool,
+) -> Result<Vec<ProjectDto>, ApiError> {
+    match request(&state, DbOp::SetAllProjectsExpanded { is_expanded }).await? {
+        DbResponse::Projects(value) => Ok(value),
+        _ => Err(unexpected_response()),
+    }
+}
+
+#[tauri::command]
 async fn reorder_project_siblings(
     state: tauri::State<'_, AppState>,
     parent_id: Option<String>,
@@ -617,6 +628,7 @@ pub fn run() {
             create_project,
             rename_project,
             set_project_expanded,
+            set_all_projects_expanded,
             reorder_project_siblings,
             move_project,
             set_project_progress,

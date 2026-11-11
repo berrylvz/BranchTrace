@@ -155,7 +155,8 @@ export interface ApiError {
 | `get_project_progress_month` | `projectId, month`（`YYYY-MM`） | `ISODate[]` | 返回该月已推进日；终止状态只读/可撤销由 UI+Rust 限制 |
 | `create_project` | `title, parentId?` | `ProjectDto` | 创建到同级末尾；父节点必须存在且未软删除，状态不限 |
 | `rename_project` | `projectId, title, expectedVersion` | `ProjectDto` | 标题非空；同名允许 |
-| `set_project_expanded` | `projectId, isExpanded` | `{projectId,isExpanded}` | 单节点 UI 状态持久化，临时展开不调用此接口 |
+| `set_project_expanded` | `projectId, isExpanded` | `ProjectDto` | 单节点 UI 状态持久化，临时展开不调用此接口 |
+| `set_all_projects_expanded` | `isExpanded: bool` | `ProjectDto[]` | 单个事务保存全部未软删除节点的 UI 状态，含隐藏后代和终止状态项目；排除回收站，不修改业务版本、排序或推进记录；返回完整正常项目树，重复调用幂等，空树返回空数组 |
 | `reorder_project_siblings` | `parentId?, orderedIds[]` | `ProjectDto[]` | 必须是同一父节点下**全部正常可见的直属节点** |
 | `move_project` | `projectId, targetParentId?, expectedVersion` | `ProjectDto` | 不允许自身/后代/已软删除目标；追加到目标末尾 |
 

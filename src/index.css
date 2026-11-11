@@ -16,6 +16,9 @@
   --muted: #66776d;
   --branch: #24745b;
   --branch-soft: #e6f2eb;
+  --progress-done-bg: #f0f1f2;
+  --progress-done-ink: #656b70;
+  --progress-done-line: #d7dbde;
   --ember: #96602d;
   --danger: #b34444;
 }
@@ -31,6 +34,9 @@
   --muted: #a4b5a9;
   --branch: #8ad1aa;
   --branch-soft: #294734;
+  --progress-done-bg: #2c3032;
+  --progress-done-ink: #b5bbbf;
+  --progress-done-line: #474d51;
   --ember: #dfaf74;
   --danger: #ed9d9d;
 }
@@ -85,9 +91,12 @@ button { color: inherit; }
 .create-bar input { width: 100%; height: 34px; padding: 6px 10px; font-size: 13px; }
 .create-bar input:focus, .form-input:focus { border-color: var(--branch); }
 
-.project-list { overflow: hidden; }
+.project-page-title { flex-wrap: wrap; }
+.tree-controls { display: flex; align-items: center; gap: 6px; }
+.tree-controls .secondary-button { padding: 5px 9px; min-height: 30px; font-size: 12px; font-weight: 500; }
+.project-list { overflow-x: auto; flex-shrink: 0; }
 .project-row-wrap + .project-row-wrap { border-top: 1px solid var(--line); }
-.project-row { min-height: 48px; padding-right: 8px; display: flex; align-items: center; gap: 8px; }
+.project-row { min-height: 48px; padding: 0 8px; display: flex; align-items: center; gap: 8px; }
 .project-row:hover, .project-row:focus-within { background: var(--surface-soft); }
 .drag-handle { width: 16px; height: 28px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: grab; opacity: 0; font-size: 16px; }
 .drag-handle:active { cursor: grabbing; }
@@ -95,18 +104,32 @@ button { color: inherit; }
 .tree-toggle, .tree-spacer { width: 16px; flex: 0 0 auto; }
 .tree-toggle { height: 28px; padding: 0; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font-size: 20px; }
 .tree-toggle:hover:not(:disabled) { color: var(--branch); }
+.tree-prefix { position: relative; display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; align-self: stretch; }
+.tree-guides { position: absolute; inset: 0; pointer-events: none; color: var(--line-strong); }
+.tree-guide-continuation, .tree-guide-down { position: absolute; top: -1px; bottom: 0; border-left: 1px solid currentColor; }
+.tree-guide-down { top: calc(50% + 10px); }
+.tree-guide-branch { position: absolute; top: 0; bottom: 0; }
+.tree-guide-branch::before { content: ''; position: absolute; top: -1px; bottom: 0; left: 0; border-left: 1px solid currentColor; }
+.tree-guide-branch.last::before { bottom: 50%; }
+.tree-guide-branch::after { content: ''; position: absolute; top: 50%; left: 0; right: 0; border-top: 1px solid currentColor; }
+.tree-toggle { position: relative; }
 .status-dot { position: relative; width: 15px; height: 15px; flex: 0 0 auto; display: inline-block; border: 1.5px solid var(--branch); border-radius: 50%; }
 .status-dot.completed { background: var(--branch); }
 .status-dot.completed::after { content: '✓'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--surface); font-size: 10px; line-height: 1; }
 .status-dot.canceled { border-color: var(--muted); }
 .status-dot.canceled::after { content: '−'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 11px; line-height: 1; }
-.project-title { min-width: 0; flex: 1; border: 0; padding: 5px 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); background: transparent; font-size: 14px; }
+.project-main { min-width: 0; display: flex; align-items: center; gap: 8px; flex: 0 1 auto; }
+.project-title { min-width: 0; flex: 0 1 auto; border: 0; padding: 5px 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); background: transparent; font-size: 14px; }
+.project-root .project-title { font-weight: 600; }
+.project-tail { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .project-row.completed .project-title, .project-row.canceled .project-title { color: var(--muted); text-decoration: line-through; }
 .progress-history, .depth-label { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
 .progress-dates { display: flex; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
 .progress-total { display: none; }
-.progress-button { min-width: 93px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface); font-size: 12px; white-space: nowrap; }
-.progress-button:hover:not(:disabled), .progress-button.checked { color: var(--branch); border-color: var(--line-strong); background: var(--branch-soft); }
+.progress-button { min-width: 93px; min-height: 30px; flex: 0 0 auto; padding: 4px 8px; border: 1px solid #24745b; border-radius: 6px; color: white; background: #24745b; font-size: 12px; white-space: nowrap; }
+.progress-button:hover:not(:disabled) { background: #1c604b; border-color: #1c604b; }
+.progress-button.checked { color: var(--progress-done-ink); border-color: var(--progress-done-line); background: var(--progress-done-bg); }
+.progress-button.checked:hover:not(:disabled) { border-color: var(--progress-done-ink); background: var(--progress-done-bg); }
 .add-child-button { color: var(--branch); }
 
 .week-controls { display: flex; align-items: center; gap: 4px; }
@@ -223,7 +246,7 @@ select.form-input { text-overflow: ellipsis; }
   .main-content { padding: 20px 16px 32px; }
   .page-toolbar { flex-wrap: wrap; gap: 12px; }
   .create-bar { width: 100%; }
-  .progress-history, .depth-label { display: none; }
+  .progress-history { display: none; }
   .project-row { gap: 5px; }
   .settings-row { flex-wrap: wrap; gap: 12px; }
   .trash-row { padding: 12px; flex-wrap: wrap; gap: 8px; }

@@ -221,6 +221,9 @@ pub enum DbOp {
         project_id: String,
         is_expanded: bool,
     },
+    SetAllProjectsExpanded {
+        is_expanded: bool,
+    },
     ReorderProjectSiblings {
         parent_id: Option<String>,
         ordered_ids: Vec<String>,

@@ -105,6 +105,9 @@ fn execute(connection: &mut Connection, op: DbOp) -> Result<DbResponse, ApiError
             project_id,
             is_expanded,
         } => set_project_expanded(connection, &project_id, is_expanded),
+        DbOp::SetAllProjectsExpanded { is_expanded } => {
+            set_all_projects_expanded(connection, is_expanded)
+        }
         DbOp::ReorderProjectSiblings {
             parent_id,
             ordered_ids,
@@ -604,6 +607,21 @@ fn set_project_expanded(
     Ok(DbResponse::Project(project_dto_by_id(
         connection, project_id,
     )?))
+}
+
+fn set_all_projects_expanded(
+    connection: &mut Connection,
+    is_expanded: bool,
+) -> Result<DbResponse, ApiError> {
+    let tx = connection.transaction().map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO project_ui_states(project_id,is_expanded) SELECT id,?1 FROM projects WHERE deleted_at IS NULL ON CONFLICT(project_id) DO UPDATE SET is_expanded=excluded.is_expanded",
+        params![if is_expanded { 1 } else { 0 }],
+    )
+    .map_err(db_error)?;
+    let result = get_project_tree(&tx)?;
+    tx.commit().map_err(db_error)?;
+    Ok(result)
 }
 
 fn reorder_project_siblings(
@@ -1762,6 +1780,169 @@ mod tests {
         }
         match get_project_tree(&connection).unwrap() {
             DbResponse::Projects(projects) => assert!(projects.is_empty()),
+            _ => panic!("unexpected tree response"),
+        }
+    }
+
+    #[test]
+    fn bulk_expansion_updates_hidden_and_terminal_projects_without_business_changes() {
+        let mut connection = test_connection();
+        let root = expansion_test_project(&mut connection, "父", None);
+        let child = expansion_test_project(&mut connection, "子", Some(&root));
+        expansion_test_project(&mut connection, "孙", Some(&child));
+        let completed = expansion_test_project(&mut connection, "完成", None);
+        let canceled = expansion_test_project(&mut connection, "取消", None);
+        set_project_terminal(&mut connection, &completed, 0, "completed").unwrap();
+        set_project_terminal(&mut connection, &canceled, 0, "canceled").unwrap();
+        set_project_progress(&mut connection, &root, None, true, 0).unwrap();
+        let trashed = expansion_test_project(&mut connection, "回收站父", None);
+        let trashed_child = expansion_test_project(&mut connection, "回收站子", Some(&trashed));
+        trash_project(&mut connection, &trashed).unwrap();
+
+        let original = expansion_test_snapshot(&connection);
+        let mut collapsed = original.clone();
+        for project in collapsed.as_array_mut().unwrap() {
+            project["isExpanded"] = serde_json::json!(false);
+        }
+        match set_all_projects_expanded(&mut connection, false).unwrap() {
+            DbResponse::Projects(projects) => {
+                assert_eq!(serde_json::to_value(projects).unwrap(), collapsed)
+            }
+            _ => panic!("unexpected bulk response"),
+        }
+        for id in [&trashed, &trashed_child] {
+            assert!(
+                project_record_by_id(&connection, id, true)
+                    .unwrap()
+                    .unwrap()
+                    .is_expanded
+            );
+        }
+
+        set_project_expanded(&mut connection, &root, true).unwrap();
+        assert!(
+            !project_record_by_id(&connection, &child, false)
+                .unwrap()
+                .unwrap()
+                .is_expanded
+        );
+        set_all_projects_expanded(&mut connection, false).unwrap();
+        set_all_projects_expanded(&mut connection, false).unwrap();
+        assert_eq!(expansion_test_snapshot(&connection), collapsed);
+        set_all_projects_expanded(&mut connection, true).unwrap();
+        set_all_projects_expanded(&mut connection, true).unwrap();
+        assert_eq!(expansion_test_snapshot(&connection), original);
+    }
+
+    #[test]
+    fn bulk_expansion_creates_missing_ui_states_and_accepts_empty_trees() {
+        let mut connection = test_connection();
+        match set_all_projects_expanded(&mut connection, false).unwrap() {
+            DbResponse::Projects(projects) => assert!(projects.is_empty()),
+            _ => panic!("unexpected empty bulk response"),
+        }
+        let root = expansion_test_project(&mut connection, "父", None);
+        let child = expansion_test_project(&mut connection, "子", Some(&root));
+        connection
+            .execute(
+                "DELETE FROM project_ui_states WHERE project_id=?1",
+                params![root],
+            )
+            .unwrap();
+        set_project_expanded(&mut connection, &child, false).unwrap();
+        set_all_projects_expanded(&mut connection, false).unwrap();
+        assert!(expansion_test_snapshot(&connection)
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["isExpanded"] == false));
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM project_ui_states", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        set_all_projects_expanded(&mut connection, true).unwrap();
+        assert!(expansion_test_snapshot(&connection)
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["isExpanded"] == true));
+    }
+
+    #[test]
+    fn bulk_expansion_rolls_back_earlier_rows_when_a_later_write_fails() {
+        let mut connection = test_connection();
+        let root = expansion_test_project(&mut connection, "父", None);
+        expansion_test_project(&mut connection, "子", Some(&root));
+        let original = expansion_test_snapshot(&connection);
+        // FAIL retains earlier statement writes; the surrounding transaction must undo them.
+        connection
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_bulk_expansion BEFORE INSERT ON project_ui_states
+             WHEN NEW.is_expanded=0 AND EXISTS(SELECT 1 FROM project_ui_states WHERE is_expanded=0)
+             BEGIN SELECT RAISE(FAIL, 'injected expansion failure'); END;",
+            )
+            .unwrap();
+        let error = set_all_projects_expanded(&mut connection, false).unwrap_err();
+        assert_eq!(error.code, "DB_ERROR");
+        assert_eq!(expansion_test_snapshot(&connection), original);
+        connection
+            .execute_batch("DROP TRIGGER fail_bulk_expansion;")
+            .unwrap();
+        set_all_projects_expanded(&mut connection, false).unwrap();
+        assert!(expansion_test_snapshot(&connection)
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["isExpanded"] == false));
+    }
+
+    #[test]
+    fn bulk_expansion_persists_when_the_database_is_reopened() {
+        let path =
+            std::env::temp_dir().join(format!("branchtrace-expansion-{}.sqlite3", Uuid::new_v4()));
+        {
+            let mut connection = initialize_connection(&path).unwrap();
+            let root = expansion_test_project(&mut connection, "父", None);
+            expansion_test_project(&mut connection, "子", Some(&root));
+            set_all_projects_expanded(&mut connection, false).unwrap();
+        }
+        {
+            let mut connection = initialize_connection(&path).unwrap();
+            assert!(expansion_test_snapshot(&connection)
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|project| project["isExpanded"] == false));
+            set_all_projects_expanded(&mut connection, true).unwrap();
+        }
+        {
+            let connection = initialize_connection(&path).unwrap();
+            assert!(expansion_test_snapshot(&connection)
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|project| project["isExpanded"] == true));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn expansion_test_project(
+        connection: &mut Connection,
+        title: &str,
+        parent_id: Option<&str>,
+    ) -> String {
+        match create_project(connection, title, parent_id.map(str::to_string)).unwrap() {
+            DbResponse::Project(project) => project.id,
+            _ => panic!("unexpected create response"),
+        }
+    }
+
+    fn expansion_test_snapshot(connection: &Connection) -> serde_json::Value {
+        match get_project_tree(connection).unwrap() {
+            DbResponse::Projects(projects) => serde_json::to_value(projects).unwrap(),
             _ => panic!("unexpected tree response"),
         }
     }
