@@ -5,8 +5,8 @@ mod models;
 
 use db::{clock_context, DbHandle};
 use models::{
-    ApiError, ClockContext, DailyWeekDto, DbOp, DbResponse, ProjectDetailDto, ProjectDto,
-    ReminderDto, ThemeSettings, TrashEntryDto,
+    ApiError, ClockContext, DailyWeekDto, DbOp, DbResponse, MonthCalendarDto, ProjectDetailDto,
+    ProjectDto, ReminderDto, ThemeSettings, TrashEntryDto,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ impl AppState {
 }
 
 fn unexpected_response() -> ApiError {
-    ApiError::internal("数据库返回了未预期的结果")
+    ApiError::internal("Database returned an unexpected response")
 }
 
 async fn request(state: &tauri::State<'_, AppState>, op: DbOp) -> Result<DbResponse, ApiError> {
@@ -472,6 +472,17 @@ async fn get_daily_week(
     }
 }
 
+#[tauri::command]
+async fn get_month_calendar(
+    state: tauri::State<'_, AppState>,
+    month: String,
+) -> Result<MonthCalendarDto, ApiError> {
+    match request(&state, DbOp::GetMonthCalendar { month }).await? {
+        DbResponse::MonthCalendar(value) => Ok(value),
+        _ => Err(unexpected_response()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewResult {
@@ -622,14 +633,20 @@ fn startup_error(mut error: ApiError, db_path: Option<&PathBuf>) -> ApiError {
 fn initialize_db(app: &tauri::App) -> Result<DbHandle, ApiError> {
     let data_dir: PathBuf = app.path().app_data_dir().map_err(|error| {
         startup_error(
-            ApiError::new("MIGRATION_ERROR", format!("无法取得应用数据目录: {error}")),
+            ApiError::new(
+                "MIGRATION_ERROR",
+                format!("Unable to resolve application data directory: {error}"),
+            ),
             None,
         )
     })?;
     let db_path = data_dir.join("branchtrace.sqlite3");
     if let Err(error) = std::fs::create_dir_all(&data_dir) {
         return Err(startup_error(
-            ApiError::new("MIGRATION_ERROR", format!("无法创建应用数据目录: {error}")),
+            ApiError::new(
+                "MIGRATION_ERROR",
+                format!("Unable to create application data directory: {error}"),
+            ),
             Some(&db_path),
         ));
     }
@@ -692,6 +709,7 @@ pub fn run() {
             update_reminder_completed_date,
             reorder_reminders,
             get_daily_week,
+            get_month_calendar,
             preview_project_trash,
             trash_project,
             trash_reminder,
@@ -703,7 +721,7 @@ pub fn run() {
             set_theme_mode
         ])
         .build(tauri::generate_context!())
-        .expect("枝迹启动失败");
+        .expect("Failed to start BranchTrace");
 
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {

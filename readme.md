@@ -50,3 +50,13 @@ cargo test
 移动位置选择器的回归测试使用 Node.js 24 内置的 TypeScript 支持，无需额外测试依赖。
 
 核心需求与验收边界见 `docs/01_MVP_需求规格.md`，API 契约见 `docs/03_Rust_API_设计.md`，开发阶段与交付出口见 `docs/develop-plan.md`。
+
+## 桌面窗口调试
+
+```
+pnpm build
+RUSTUP_HOME="$PWD/.rustup" CARGO_HOME="$PWD/.cargo" \
+PATH="$PWD/.cargo/bin:$PATH" \
+pnpm tauri dev --no-watch --config '{"build":{"beforeDevCommand":"pnpm preview --host 127.0.0.1 --port 1420"}}'
+```
+

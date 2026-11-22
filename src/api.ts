@@ -3,9 +3,11 @@ import type {
   ApiError,
   ClockContext,
   DailyWeekDto,
+  MonthCalendarDto,
   ProjectDailyItem,
   ProjectDetailDto,
   ProjectDto,
+  ReminderDailyItem,
   ReminderDto,
   ThemeMode,
   ThemeSettings,
@@ -82,7 +84,7 @@ function validateTitle(raw: unknown): string {
   const trimmed = String(raw ?? '').trim()
   const length = [...trimmed].length
   if (length === 0 || length > 500) {
-    mockFail('INVALID_TITLE', '名称不能为空，且长度不能超过 500 个字符')
+    mockFail('INVALID_TITLE', 'Title cannot be empty and must be 500 characters or fewer')
   }
   return trimmed
 }
@@ -90,12 +92,12 @@ function validateTitle(raw: unknown): string {
 function validateIsoDate(raw: unknown): string {
   const value = String(raw ?? '')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    mockFail('INVALID_DATE', `无效日期: ${value}`)
+    mockFail('INVALID_DATE', `Invalid date: ${value}`)
   }
   const [year, month, day] = value.split('-').map(Number)
   const date = new Date(year, month - 1, day, 12)
   if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-    mockFail('INVALID_DATE', `无效日期: ${value}`)
+    mockFail('INVALID_DATE', `Invalid date: ${value}`)
   }
   return value
 }
@@ -103,7 +105,7 @@ function validateIsoDate(raw: unknown): string {
 function validateMonth(raw: unknown): string {
   const value = String(raw ?? '')
   if (!/^\d{4}-\d{2}$/.test(value)) {
-    mockFail('INVALID_DATE', '月份必须使用 YYYY-MM 格式')
+    mockFail('INVALID_DATE', 'Month must use YYYY-MM format')
   }
   validateIsoDate(`${value}-01`)
   return value
@@ -112,7 +114,7 @@ function validateMonth(raw: unknown): string {
 function checkVersion(expected: unknown, actual: number) {
   const expectedNumber = Number(expected)
   if (expectedNumber !== actual) {
-    mockFail('VERSION_CONFLICT', '数据已经被其他操作修改，请刷新后重试', { expectedVersion: expectedNumber, actualVersion: actual })
+    mockFail('VERSION_CONFLICT', 'This item was modified elsewhere. Please refresh and try again.', { expectedVersion: expectedNumber, actualVersion: actual })
   }
 }
 
@@ -249,7 +251,7 @@ function mockProjectDetail(id: string): ProjectDetailDto {
   const state = getMockState()
   const activeProjects = state.projects.filter((item) => !mockProjectIsTrashed(item, state))
   const project = activeProjects.find((item) => item.id === id)
-  if (!project) mockFail('NOT_FOUND', '项目不存在')
+  if (!project) mockFail('NOT_FOUND', 'Project not found')
   const byId = new Map(activeProjects.map((item) => [item.id, item]))
   const path: string[] = []
   const visited = new Set<string>([project.id])
@@ -267,7 +269,7 @@ function mockProjectDetail(id: string): ProjectDetailDto {
 function mockDaily(weekStart: string): DailyWeekDto {
   const validatedStart = validateIsoDate(weekStart)
   if (dateFrom(validatedStart).getDay() !== 1) {
-    mockFail('INVALID_DATE', 'Daily 周起始日必须是周一')
+    mockFail('INVALID_DATE', 'Week start date must be a Monday')
   }
   const state = getMockState()
   const days: DailyWeekDto['days'] = Array.from({ length: 7 }, (_, offset) => ({
@@ -349,15 +351,96 @@ function mockDaily(weekStart: string): DailyWeekDto {
   return { weekStart: validatedStart, today, days }
 }
 
+function mockMonthCalendar(month: string): MonthCalendarDto {
+  const validatedMonth = validateMonth(month)
+  const [year, monthNumber] = validatedMonth.split('-').map(Number)
+  const firstDay = `${validatedMonth}-01`
+  const lastDate = new Date(year, monthNumber, 0, 12)
+  const lastDay = iso(lastDate)
+  const gridStart = monday(firstDay)
+  const lastWeekday = lastDate.getDay() || 7
+  const gridEnd = addDays(lastDay, 7 - lastWeekday)
+
+  const days: MonthCalendarDto['days'] = []
+  let cursor = gridStart
+  while (cursor <= gridEnd) {
+    days.push({
+      date: cursor,
+      inCurrentMonth: cursor.startsWith(validatedMonth),
+      completedProjectCount: 0,
+      progressedProjectCount: 0,
+      plannedReminders: [],
+      crossDayCompletedReminders: [],
+    })
+    cursor = addDays(cursor, 1)
+  }
+
+  const state = getMockState()
+  const index = new Map(days.map((day, position) => [day.date, position]))
+  const activeProjects = state.projects.filter((project) => !mockProjectIsTrashed(project, state))
+  for (const project of activeProjects) {
+    const completedOn = project.status === 'completed' ? project.completedDate : null
+    if (completedOn && index.has(completedOn)) {
+      days[index.get(completedOn)!].completedProjectCount += 1
+    }
+    for (const progressDate of sortedDates(state.progress[project.id])) {
+      const dayIndex = index.get(progressDate)
+      if (dayIndex === undefined) continue
+      if (completedOn !== progressDate) {
+        days[dayIndex].progressedProjectCount += 1
+      }
+    }
+  }
+
+  const today = dateToday()
+  const overdueReminders: ReminderDailyItem[] = []
+  for (const reminder of state.reminders) {
+    if (mockReminderIsTrashed(reminder.id, state)) continue
+    const plannedIndex = index.get(reminder.scheduledDate)
+    if (plannedIndex !== undefined) {
+      days[plannedIndex].plannedReminders.push({
+        reminder: { ...reminder },
+        displayType: 'planned',
+        isPlannedAndCompletedSameDay: reminder.status === 'completed' && reminder.completedDate === reminder.scheduledDate,
+      })
+    }
+    if (reminder.status === 'completed' && reminder.completedDate && reminder.completedDate !== reminder.scheduledDate) {
+      const completedIndex = index.get(reminder.completedDate)
+      if (completedIndex !== undefined) {
+        days[completedIndex].crossDayCompletedReminders.push({
+          reminder: { ...reminder },
+          displayType: 'completed',
+          isPlannedAndCompletedSameDay: false,
+        })
+      }
+    }
+    if (reminder.status === 'active' && reminder.scheduledDate < today) {
+      overdueReminders.push({
+        reminder: { ...reminder },
+        displayType: 'overdue',
+        isPlannedAndCompletedSameDay: false,
+      })
+    }
+  }
+
+  for (const day of days) {
+    day.plannedReminders.sort((a, b) => a.reminder.sortOrder - b.reminder.sortOrder || a.reminder.id.localeCompare(b.reminder.id))
+    day.crossDayCompletedReminders.sort((a, b) => (a.reminder.completedActionAt ?? '').localeCompare(b.reminder.completedActionAt ?? '') || a.reminder.id.localeCompare(b.reminder.id))
+  }
+  overdueReminders.sort((a, b) => a.reminder.scheduledDate.localeCompare(b.reminder.scheduledDate) || a.reminder.sortOrder - b.reminder.sortOrder || a.reminder.id.localeCompare(b.reminder.id))
+
+  return { month: validatedMonth, gridStart, gridEnd, today, overdueReminders, days }
+}
+
 function activeProjectById(state: MockState, id: string): ProjectDto {
   const project = state.projects.find((item) => item.id === id && !mockProjectIsTrashed(item, state))
-  if (!project) mockFail('NOT_FOUND', '项目不存在')
+  if (!project) mockFail('NOT_FOUND', 'Project not found')
   return project
 }
 
 function activeReminderById(state: MockState, id: string): ReminderDto {
   const reminder = state.reminders.find((item) => item.id === id && !mockReminderIsTrashed(item.id, state))
-  if (!reminder) mockFail('NOT_FOUND', '提醒不存在')
+  if (!reminder) mockFail('NOT_FOUND', 'Reminder not found')
   return reminder
 }
 
@@ -382,7 +465,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       const title = validateTitle(args.title)
       const parentId = args.parentId ? String(args.parentId) : null
       if (parentId !== null && !state.projects.some((item) => item.id === parentId && !mockProjectIsTrashed(item, state))) {
-        mockFail('INVALID_PARENT', '父项目不存在或已在回收站')
+        mockFail('INVALID_PARENT', 'Parent project does not exist or is in Trash')
       }
       const siblings = state.projects.filter((item) => item.parentId === parentId && !mockProjectIsTrashed(item, state))
       const project: ProjectDto = {
@@ -445,7 +528,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
         .sort()
       const supplied = [...orderedIds].sort()
       if (current.length !== orderedIds.length || current.some((value, idx) => value !== supplied[idx])) {
-        mockFail('REORDER_MEMBERSHIP_MISMATCH', '排序列表必须包含同一层级的全部项目')
+        mockFail('REORDER_MEMBERSHIP_MISMATCH', 'Reorder list must include all projects in the same level')
       }
       const orderIndex = new Map(orderedIds.map((projectId, idx) => [projectId, (idx + 1) * 1024]))
       const nextState: MockState = {
@@ -468,16 +551,16 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       const byId = new Map(activeProjects.map((item) => [item.id, item]))
       if (targetParentId !== null) {
         if (!byId.has(targetParentId)) {
-          mockFail('INVALID_PARENT', '目标项目不存在或已在回收站')
+          mockFail('INVALID_PARENT', 'Target project does not exist or is in Trash')
         }
         let current: string | null = targetParentId
         const visited = new Set<string>()
         while (current) {
           if (current === project.id) {
-            mockFail('INVALID_PARENT', '不能移动到自身或后代项目')
+            mockFail('INVALID_PARENT', 'Cannot move a project into itself or its descendants')
           }
           if (visited.has(current)) {
-            mockFail('DB_ERROR', '项目树关系存在循环')
+            mockFail('DB_ERROR', 'Project tree contains a cycle')
           }
           visited.add(current)
           current = byId.get(current)?.parentId ?? null
@@ -503,10 +586,10 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       let changed = false
       if (present) {
         if (project.status !== 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '终止状态的项目不能新增推进')
+          mockFail('INVALID_STATUS_TRANSITION', 'Cannot log new progress for a completed or canceled project')
         }
         if (date > today) {
-          mockFail('FUTURE_DATE_FORBIDDEN', '不能新增未来日期的推进')
+          mockFail('FUTURE_DATE_FORBIDDEN', 'Cannot log progress for a future date')
         }
         if (!existing.includes(date)) {
           nextDates = [...existing, date].sort()
@@ -534,17 +617,17 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       let updated: ProjectDto
       if (command === 'restore_project') {
         if (project.status === 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '项目已经是 active 状态')
+          mockFail('INVALID_STATUS_TRANSITION', 'Project is already active')
         }
         updated = { ...project, status: 'active', completedDate: null, canceledDate: null, version: project.version + 1 }
       } else {
         if (project.status !== 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '只有 active 项目可以完成或取消')
+          mockFail('INVALID_STATUS_TRANSITION', 'Only active projects can be completed or canceled')
         }
         const dates = sortedDates(state.progress[project.id])
         const latest = dates[dates.length - 1]
         if (latest && latest > today) {
-          mockFail('TERMINAL_DATE_BEFORE_PROGRESS', `终止日期不能早于最后推进日期（${latest}），请先撤销该日期之后的推进记录`, { latestProgressDate: latest })
+          mockFail('TERMINAL_DATE_BEFORE_PROGRESS', `End date cannot be earlier than the latest progress date (${latest}). Remove later progress entries first.`, { latestProgressDate: latest })
         }
         updated = command === 'complete_project'
           ? { ...project, status: 'completed', completedDate: today, canceledDate: null, version: project.version + 1 }
@@ -561,17 +644,17 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       const project = activeProjectById(state, String(args.projectId))
       checkVersion(args.expectedVersion, project.version)
       if (project.status === 'active') {
-        mockFail('INVALID_STATUS_TRANSITION', 'active 项目没有终止日期')
+        mockFail('INVALID_STATUS_TRANSITION', 'Active projects do not have an end date')
       }
       const date = validateIsoDate(args.date)
       const today = dateToday()
       if (date > today) {
-        mockFail('FUTURE_DATE_FORBIDDEN', '终止日期不能是未来日期')
+        mockFail('FUTURE_DATE_FORBIDDEN', 'End date cannot be in the future')
       }
       const dates = sortedDates(state.progress[project.id])
       const latest = dates[dates.length - 1]
       if (latest && latest > date) {
-        mockFail('TERMINAL_DATE_BEFORE_PROGRESS', `终止日期不能早于最后推进日期（${latest}），请先撤销该日期之后的推进记录`, { latestProgressDate: latest })
+        mockFail('TERMINAL_DATE_BEFORE_PROGRESS', `End date cannot be earlier than the latest progress date (${latest}). Remove later progress entries first.`, { latestProgressDate: latest })
       }
       const updated: ProjectDto = project.status === 'completed'
         ? { ...project, completedDate: date, version: project.version + 1 }
@@ -613,7 +696,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     }
     case 'permanently_delete_trash_entry': {
       const entry = state.trash.find((item) => item.id === String(args.entryId))
-      if (!entry) mockFail('NOT_FOUND', '回收站条目不存在')
+      if (!entry) mockFail('NOT_FOUND', 'Trash entry not found')
       if (entry.kind === 'project') {
         const ids = new Set(mockProjectSubtree(entry.rootEntityId, state).map((project) => project.id))
         const removedTrashIds = new Set(
@@ -650,7 +733,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     case 'empty_trash': {
       const kind = String(args.kind)
       if (kind !== 'project' && kind !== 'reminder') {
-        mockFail('INVALID_STATUS_TRANSITION', '回收站分类无效')
+        mockFail('INVALID_STATUS_TRANSITION', 'Invalid trash category')
       }
       const entries = state.trash.filter((entry) => entry.kind === kind)
       if (kind === 'project') {
@@ -690,13 +773,15 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     }
     case 'get_daily_week':
       return mockDaily(String(args.weekStart)) as T
+    case 'get_month_calendar':
+      return mockMonthCalendar(String(args.month)) as T
     case 'get_reminder':
       return { ...activeReminderById(state, String(args.reminderId)) } as T
     case 'create_reminder': {
       const title = validateTitle(args.title)
       const scheduledDate = validateIsoDate(args.scheduledDate)
       if (scheduledDate < dateToday()) {
-        mockFail('SCHEDULE_IN_PAST', '计划日期必须是今天或未来')
+        mockFail('SCHEDULE_IN_PAST', 'Scheduled date must be today or in the future')
       }
       const siblings = state.reminders.filter((item) => item.scheduledDate === scheduledDate && !mockReminderIsTrashed(item.id, state))
       const reminder: ReminderDto = {
@@ -734,7 +819,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       checkVersion(args.expectedVersion, reminder.version)
       const scheduledDate = validateIsoDate(args.scheduledDate)
       if (scheduledDate < dateToday()) {
-        mockFail('SCHEDULE_IN_PAST', '计划日期必须是今天或未来')
+        mockFail('SCHEDULE_IN_PAST', 'Scheduled date must be today or in the future')
       }
       const sortOrder = nextOrder(state.reminders.filter((item) => item.scheduledDate === scheduledDate && !mockReminderIsTrashed(item.id, state)))
       const updated: ReminderDto = { ...reminder, scheduledDate, sortOrder, version: reminder.version + 1 }
@@ -754,7 +839,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
         .sort()
       const supplied = [...orderedIds].sort()
       if (current.length !== orderedIds.length || current.some((value, idx) => value !== supplied[idx])) {
-        mockFail('REORDER_MEMBERSHIP_MISMATCH', '排序列表必须包含该计划日的全部提醒')
+        mockFail('REORDER_MEMBERSHIP_MISMATCH', 'Reorder list must include all reminders for that scheduled date')
       }
       const orderIndex = new Map(orderedIds.map((reminderId, idx) => [reminderId, (idx + 1) * 1024]))
       const nextState: MockState = {
@@ -776,17 +861,17 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       let updated: ReminderDto
       if (command === 'restore_reminder') {
         if (reminder.status === 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '提醒已经是 active 状态')
+          mockFail('INVALID_STATUS_TRANSITION', 'Reminder is already active')
         }
         updated = { ...reminder, status: 'active', completedDate: null, completedActionAt: null, canceledDate: null, version: reminder.version + 1 }
       } else if (command === 'complete_reminder') {
         if (reminder.status !== 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '只有 active 提醒可以完成')
+          mockFail('INVALID_STATUS_TRANSITION', 'Only active reminders can be completed')
         }
         updated = { ...reminder, status: 'completed', completedDate: today, completedActionAt: new Date().toISOString(), canceledDate: null, version: reminder.version + 1 }
       } else {
         if (reminder.status !== 'active') {
-          mockFail('INVALID_STATUS_TRANSITION', '只有 active 提醒可以取消')
+          mockFail('INVALID_STATUS_TRANSITION', 'Only active reminders can be canceled')
         }
         updated = { ...reminder, status: 'canceled', completedDate: null, completedActionAt: null, canceledDate: today, version: reminder.version + 1 }
       }
@@ -801,11 +886,11 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
       const reminder = activeReminderById(state, String(args.reminderId))
       checkVersion(args.expectedVersion, reminder.version)
       if (reminder.status !== 'completed') {
-        mockFail('INVALID_STATUS_TRANSITION', '只有已完成提醒可以修改完成日期')
+        mockFail('INVALID_STATUS_TRANSITION', 'Only completed reminders can update their completed date')
       }
       const date = validateIsoDate(args.date)
       if (date > dateToday()) {
-        mockFail('FUTURE_DATE_FORBIDDEN', '完成日期不能是未来日期')
+        mockFail('FUTURE_DATE_FORBIDDEN', 'Completed date cannot be in the future')
       }
       const updated: ReminderDto = { ...reminder, completedDate: date, version: reminder.version + 1 }
       const nextState: MockState = {
@@ -837,7 +922,7 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     case 'list_trash': {
       const kind = String(args.kind)
       if (kind !== 'project' && kind !== 'reminder') {
-        mockFail('INVALID_STATUS_TRANSITION', '回收站分类无效')
+        mockFail('INVALID_STATUS_TRANSITION', 'Invalid trash category')
       }
       return state.trash
         .filter((entry) => entry.kind === kind)
@@ -849,13 +934,13 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     }
     case 'restore_trash_entry': {
       const entry = state.trash.find((item) => item.id === String(args.entryId))
-      if (!entry) mockFail('NOT_FOUND', '回收站条目不存在')
+      if (!entry) mockFail('NOT_FOUND', 'Trash entry not found')
       if (entry.kind === 'project') {
         const root = state.projects.find((item) => item.id === entry.rootEntityId)
         if (root?.parentId) {
           const parent = state.projects.find((item) => item.id === root.parentId)
           if (parent && mockProjectIsTrashed(parent, state)) {
-            mockFail('PARENT_IN_TRASH', '请先恢复父项目')
+            mockFail('PARENT_IN_TRASH', 'Restore the parent project first')
           }
         }
         const batchMembers = state.trashBatches?.[entry.id]
@@ -888,14 +973,14 @@ async function mockCall<T>(command: string, args: Record<string, unknown> = {}):
     case 'set_theme_mode': {
       const mode = String(args.mode)
       if (!['light', 'dark', 'system'].includes(mode)) {
-        mockFail('INVALID_STATUS_TRANSITION', '主题模式无效')
+        mockFail('INVALID_STATUS_TRANSITION', 'Invalid theme mode')
       }
       const nextState: MockState = { ...state, themeMode: mode as ThemeMode }
       saveMockState(nextState)
       return { themeMode: nextState.themeMode } as T
     }
     default:
-      mockFail('DB_ERROR', `未知命令: ${command}`)
+      mockFail('DB_ERROR', `Unknown command: ${command}`)
   }
 }
 
@@ -950,6 +1035,7 @@ export const api = {
   updateReminderCompletedDate: (reminderId: string, date: string, expectedVersion: number) => call<ReminderDto>('update_reminder_completed_date', { reminderId, date, expectedVersion }),
   reorderReminders: (scheduledDate: string, orderedIds: string[]) => call<ReminderDto[]>('reorder_reminders', { scheduledDate, orderedIds }),
   getDailyWeek: (weekStart: string) => call<DailyWeekDto>('get_daily_week', { weekStart }),
+  getMonthCalendar: (month: string) => call<MonthCalendarDto>('get_month_calendar', { month }),
   previewProjectTrash: (projectId: string) => call<{ activeNodeCount: number }>('preview_project_trash', { projectId }),
   trashProject: (projectId: string) => call<TrashEntryDto>('trash_project', { projectId }),
   trashReminder: (reminderId: string) => call<TrashEntryDto>('trash_reminder', { reminderId }),

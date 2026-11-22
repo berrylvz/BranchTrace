@@ -161,3 +161,65 @@ test('daily week computes progressedSameDay, shortIds, overdue, and cross-day co
   assert.ok(todayCol.progressedProjects[0].shortId)
   assert.notEqual(todayCol.completedProjects[0].shortId, todayCol.progressedProjects[0].shortId)
 })
+
+test('month calendar returns full Mon-Sun grid, project counts, planned, cross-day completed, and overdue reminders', async () => {
+  const { api } = await createMockApi()
+  const { today } = await api.getClockContext()
+  const currentMonth = today.slice(0, 7)
+  const tomorrow = shiftDate(today, 1)
+  const pastDate = shiftDate(today, -40)
+
+  const { api: seededApi } = await createMockApi({
+    reminders: [{
+      id: 'overdue-past',
+      title: 'Old overdue reminder',
+      scheduledDate: pastDate,
+      status: 'active',
+      completedDate: null,
+      completedActionAt: null,
+      canceledDate: null,
+      sortOrder: 1024,
+      version: 0,
+    }],
+  })
+
+  const p1 = await seededApi.createProject('Completed and progressed')
+  const p1Prog = await seededApi.setProjectProgress(p1.id, today, true, p1.version)
+  await seededApi.completeProject(p1.id, p1Prog.version)
+
+  const p2 = await seededApi.createProject('Progressed only')
+  await seededApi.setProjectProgress(p2.id, today, true, p2.version)
+
+  const rToday = await seededApi.createReminder('Due today', today)
+  const rTomorrow = await seededApi.createReminder('Done early', tomorrow)
+  await seededApi.completeReminder(rTomorrow.id, rTomorrow.version)
+
+  const cal = await seededApi.getMonthCalendar(currentMonth)
+  assert.equal(cal.month, currentMonth)
+  assert.equal(cal.today, today)
+  assert.equal(cal.days.length % 7, 0)
+  assert.equal(new Date(`${cal.gridStart}T12:00:00`).getDay(), 1)
+  assert.equal(new Date(`${cal.gridEnd}T12:00:00`).getDay(), 0)
+
+  const todayCell = cal.days.find((day) => day.date === today)
+  assert.ok(todayCell)
+  assert.equal(todayCell.inCurrentMonth, true)
+  assert.equal(todayCell.completedProjectCount, 1)
+  assert.equal(todayCell.progressedProjectCount, 1)
+  assert.deepEqual(todayCell.plannedReminders.map((item) => item.reminder.id), [rToday.id])
+  assert.deepEqual(todayCell.crossDayCompletedReminders.map((item) => item.reminder.id), [rTomorrow.id])
+  assert.deepEqual(cal.overdueReminders.map((item) => item.reminder.id), ['overdue-past'])
+
+  const dec = await api.getMonthCalendar('2026-12')
+  assert.equal(dec.gridStart, '2026-11-30')
+  assert.equal(dec.gridEnd, '2027-01-03')
+  assert.equal(dec.days.length, 35)
+  assert.equal(dec.days[0].inCurrentMonth, false)
+  assert.equal(dec.days[1].inCurrentMonth, true)
+  assert.equal(dec.days[34].inCurrentMonth, false)
+
+  await assert.rejects(
+    api.getMonthCalendar('2026-13'),
+    (error) => error.code === 'INVALID_DATE',
+  )
+})

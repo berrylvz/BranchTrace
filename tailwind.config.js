@@ -4,10 +4,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: '#17212b',
-        paper: '#f6f8f7',
+        ink: '#25382e',
+        paper: '#f7f9f8',
         branch: '#24745b',
-        ember: '#d97941',
+        ember: '#96602d',
       },
     },
   },

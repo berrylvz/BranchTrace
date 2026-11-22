@@ -67,6 +67,24 @@ export interface DailyWeekDto {
   days: DailyDayDto[]
 }
 
+export interface MonthDayDto {
+  date: ISODate
+  inCurrentMonth: boolean
+  completedProjectCount: number
+  progressedProjectCount: number
+  plannedReminders: ReminderDailyItem[]
+  crossDayCompletedReminders: ReminderDailyItem[]
+}
+
+export interface MonthCalendarDto {
+  month: string
+  gridStart: ISODate
+  gridEnd: ISODate
+  today: ISODate
+  overdueReminders: ReminderDailyItem[]
+  days: MonthDayDto[]
+}
+
 export interface TrashEntryDto {
   id: string
   kind: 'project' | 'reminder'

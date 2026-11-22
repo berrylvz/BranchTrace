@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createProjectTree, MAX_TREE_INDENT } from '../src/project-tree.ts'
+import { buildProjectDisplayItems, computeReorderedIds, createProjectTree, MAX_TREE_INDENT } from '../src/project-tree.ts'
 
 const project = (id, parentId = null, sortOrder = 1024, isExpanded = true) => ({ id, title: id, parentId, sortOrder, isExpanded })
 
@@ -64,4 +64,33 @@ test('very deep trees render iteratively with bounded guide metadata and actual 
 test('duplicate IDs and cyclic malformed input cannot make traversal hang', () => {
   const tree = createProjectTree([project('root'), project('child', 'root'), project('root', 'child'), project('cycle', 'cycle')])
   assert.deepEqual(tree.rows.map((row) => row.project.id), ['root', 'child'])
+})
+
+test('temporary expansion reveals children for inline child creation without mutating persisted state', () => {
+  const projects = [project('root', null, 1024, false), project('child', 'root', 1024, true), project('sibling', null, 2048, true)]
+  const collapsed = createProjectTree(projects)
+  assert.deepEqual(collapsed.rows.map((row) => row.project.id), ['root', 'sibling'])
+
+  const tempExpanded = new Set(['root'])
+  const revealed = createProjectTree(projects, tempExpanded)
+  assert.deepEqual(revealed.rows.map((row) => row.project.id), ['root', 'child', 'sibling'])
+  assert.equal(projects[0].isExpanded, false)
+
+  const display = buildProjectDisplayItems(revealed.rows, 'root', tempExpanded)
+  assert.deepEqual(display.map((item) => item.kind === 'project' ? item.row.project.id : `input:${item.parent.id}@${item.depth}`), [
+    'root', 'child', 'input:root@1', 'sibling',
+  ])
+  // Existing last direct child keeps vertical guide unbroken to the inline child input.
+  assert.equal(display[1].kind === 'project' && display[1].row.isLastSibling, false)
+})
+
+test('computeReorderedIds places dragged item accurately before or after target and ignores no-ops', () => {
+  assert.deepEqual(computeReorderedIds(['a', 'b', 'c'], 'a', 'c', 'before'), ['b', 'a', 'c'])
+  assert.deepEqual(computeReorderedIds(['a', 'b', 'c'], 'a', 'c', 'after'), ['b', 'c', 'a'])
+  assert.deepEqual(computeReorderedIds(['a', 'b', 'c'], 'c', 'a', 'before'), ['c', 'a', 'b'])
+  assert.deepEqual(computeReorderedIds(['a', 'b', 'c'], 'c', 'a', 'after'), ['a', 'c', 'b'])
+  assert.equal(computeReorderedIds(['a', 'b', 'c'], 'a', 'b', 'before'), null)
+  assert.equal(computeReorderedIds(['a', 'b', 'c'], 'b', 'a', 'after'), null)
+  assert.equal(computeReorderedIds(['a', 'b', 'c'], 'a', 'a', 'before'), null)
+  assert.equal(computeReorderedIds(['a', 'b'], 'missing', 'b', 'after'), null)
 })

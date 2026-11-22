@@ -120,6 +120,28 @@ pub struct DailyWeekDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MonthDayDto {
+    pub date: String,
+    pub in_current_month: bool,
+    pub completed_project_count: i64,
+    pub progressed_project_count: i64,
+    pub planned_reminders: Vec<ReminderDailyItem>,
+    pub cross_day_completed_reminders: Vec<ReminderDailyItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthCalendarDto {
+    pub month: String,
+    pub grid_start: String,
+    pub grid_end: String,
+    pub today: String,
+    pub overdue_reminders: Vec<ReminderDailyItem>,
+    pub days: Vec<MonthDayDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrashEntryDto {
     pub id: String,
     pub kind: String,
@@ -182,6 +204,7 @@ pub enum DbResponse {
     Reminder(ReminderDto),
     Reminders(Vec<ReminderDto>),
     Daily(DailyWeekDto),
+    MonthCalendar(MonthCalendarDto),
     Preview {
         active_node_count: i64,
     },
@@ -296,6 +319,9 @@ pub enum DbOp {
     },
     GetDailyWeek {
         week_start: String,
+    },
+    GetMonthCalendar {
+        month: String,
     },
     PreviewProjectTrash {
         project_id: String,

@@ -38,7 +38,12 @@ impl DbHandle {
                     let _ = ready_sender.send(Err(error.message));
                 }
             })
-            .map_err(|error| ApiError::new("DB_ERROR", format!("无法启动数据库线程: {error}")))?;
+            .map_err(|error| {
+                ApiError::new(
+                    "DB_ERROR",
+                    format!("Failed to start database worker thread: {error}"),
+                )
+            })?;
 
         match ready_receiver.recv() {
             Ok(Ok(())) => Ok(Self {
@@ -55,7 +60,7 @@ impl DbHandle {
                 let _ = worker.join();
                 Err(ApiError::new(
                     "DB_ERROR",
-                    format!("数据库线程启动失败: {error}"),
+                    format!("Database worker thread failed to initialize: {error}"),
                 ))
             }
         }
@@ -70,15 +75,15 @@ impl DbHandle {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             guard
                 .clone()
-                .ok_or_else(|| ApiError::new("DB_ERROR", "数据库正在关闭"))?
+                .ok_or_else(|| ApiError::new("DB_ERROR", "Database is shutting down"))?
         };
         let (reply, receiver) = oneshot::channel();
         sender
             .send(DbRequest { op, reply })
-            .map_err(|_| ApiError::new("DB_ERROR", "数据库线程已经停止"))?;
+            .map_err(|_| ApiError::new("DB_ERROR", "Database worker thread has stopped"))?;
         receiver
             .await
-            .map_err(|_| ApiError::new("DB_ERROR", "数据库操作没有返回结果"))?
+            .map_err(|_| ApiError::new("DB_ERROR", "Database operation did not return a result"))?
     }
 
     pub fn shutdown(&self) {
@@ -127,7 +132,7 @@ fn initialize_connection(path: &PathBuf) -> Result<Connection, ApiError> {
         other => {
             return Err(ApiError::new(
                 "MIGRATION_ERROR",
-                format!("不支持的数据库版本: {other}"),
+                format!("Unsupported database schema version: {other}"),
             ))
         }
     }
@@ -138,7 +143,10 @@ fn initialize_connection(path: &PathBuf) -> Result<Connection, ApiError> {
             .map_err(db_error)?;
         let mut rows = statement.query([]).map_err(db_error)?;
         if rows.next().map_err(db_error)?.is_some() {
-            return Err(ApiError::new("MIGRATION_ERROR", "数据库外键完整性检查失败"));
+            return Err(ApiError::new(
+                "MIGRATION_ERROR",
+                "Database foreign key integrity check failed",
+            ));
         }
     }
     Ok(connection)
@@ -233,6 +241,7 @@ fn execute(connection: &mut Connection, op: DbOp) -> Result<DbResponse, ApiError
             ordered_ids,
         } => reorder_reminders(connection, &scheduled_date, ordered_ids),
         DbOp::GetDailyWeek { week_start } => get_daily_week(connection, &week_start),
+        DbOp::GetMonthCalendar { month } => get_month_calendar(connection, &month),
         DbOp::PreviewProjectTrash { project_id } => preview_project_trash(connection, &project_id),
         DbOp::TrashProject { project_id } => trash_project(connection, &project_id),
         DbOp::TrashReminder { reminder_id } => trash_reminder(connection, &reminder_id),
@@ -252,9 +261,12 @@ fn db_error(error: rusqlite::Error) -> ApiError {
         rusqlite::Error::SqliteFailure(code, _)
             if code.code == ErrorCode::DatabaseBusy || code.code == ErrorCode::DatabaseLocked =>
         {
-            ApiError::new("DB_BUSY", "数据库当前繁忙，请稍后重试")
+            ApiError::new(
+                "DB_BUSY",
+                "Database is currently busy. Please try again shortly.",
+            )
         }
-        _ => ApiError::new("DB_ERROR", format!("数据库操作失败: {error}")),
+        _ => ApiError::new("DB_ERROR", format!("Database operation failed: {error}")),
     }
 }
 
@@ -286,19 +298,28 @@ fn parse_date(value: &str) -> Result<NaiveDate, ApiError> {
             .enumerate()
             .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
     if !valid_shape {
-        return Err(ApiError::new("INVALID_DATE", format!("无效日期: {value}")));
+        return Err(ApiError::new(
+            "INVALID_DATE",
+            format!("Invalid date: {value}"),
+        ));
     }
     let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map_err(|_| ApiError::new("INVALID_DATE", format!("无效日期: {value}")))?;
+        .map_err(|_| ApiError::new("INVALID_DATE", format!("Invalid date: {value}")))?;
     if parsed.format("%Y-%m-%d").to_string() != value {
-        return Err(ApiError::new("INVALID_DATE", format!("无效日期: {value}")));
+        return Err(ApiError::new(
+            "INVALID_DATE",
+            format!("Invalid date: {value}"),
+        ));
     }
     Ok(parsed)
 }
 
 fn parse_month(value: &str) -> Result<NaiveDate, ApiError> {
     if value.len() != 7 {
-        return Err(ApiError::new("INVALID_DATE", "月份必须使用 YYYY-MM 格式"));
+        return Err(ApiError::new(
+            "INVALID_DATE",
+            "Month must use YYYY-MM format",
+        ));
     }
     parse_date(&format!("{value}-01"))
 }
@@ -313,15 +334,18 @@ fn validate_title(title: &str) -> Result<String, ApiError> {
     if length == 0 || length > 500 {
         return Err(ApiError::new(
             "INVALID_TITLE",
-            "名称不能为空，且长度不能超过 500 个字符",
+            "Title cannot be empty and must be 500 characters or fewer",
         ));
     }
     Ok(trimmed.to_string())
 }
 
 fn version_error(expected: i64, actual: i64) -> ApiError {
-    ApiError::new("VERSION_CONFLICT", "数据已经被其他操作修改，请刷新后重试")
-        .with_details(serde_json::json!({ "expectedVersion": expected, "actualVersion": actual }))
+    ApiError::new(
+        "VERSION_CONFLICT",
+        "This item was modified elsewhere. Please refresh and try again.",
+    )
+    .with_details(serde_json::json!({ "expectedVersion": expected, "actualVersion": actual }))
 }
 
 fn check_version(expected: i64, actual: i64) -> Result<(), ApiError> {
@@ -481,7 +505,7 @@ fn project_dto(record: &ProjectRecord, progress: &ProgressMap) -> ProjectDto {
 
 fn project_dto_by_id(connection: &Connection, id: &str) -> Result<ProjectDto, ApiError> {
     let record = project_record_by_id(connection, id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     let progress = load_progress_map(connection)?;
     Ok(project_dto(&record, &progress))
 }
@@ -553,7 +577,7 @@ fn get_project_detail(connection: &Connection, project_id: &str) -> Result<DbRes
     let record = records
         .iter()
         .find(|record| record.id == project_id)
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     let progress = load_progress_map(connection)?;
     let by_id: HashMap<String, ProjectRecord> = records
         .iter()
@@ -566,7 +590,7 @@ fn get_project_detail(connection: &Connection, project_id: &str) -> Result<DbRes
     while let Some(parent_id) = parent {
         guard += 1;
         if guard > records.len() + 1 {
-            return Err(ApiError::new("DB_ERROR", "项目树关系存在循环"));
+            return Err(ApiError::new("DB_ERROR", "Project tree contains a cycle"));
         }
         if let Some(parent_record) = by_id.get(&parent_id) {
             path.push(parent_record.title.clone());
@@ -591,7 +615,7 @@ fn get_project_progress_month(
 ) -> Result<DbResponse, ApiError> {
     parse_month(month)?;
     if project_record_by_id(connection, project_id, false)?.is_none() {
-        return Err(ApiError::new("NOT_FOUND", "项目不存在"));
+        return Err(ApiError::new("NOT_FOUND", "Project not found"));
     }
     let progress = load_progress_map(connection)?;
     Ok(DbResponse::Dates(
@@ -614,7 +638,10 @@ fn create_project(
     let tx = begin_immediate(connection)?;
     if let Some(parent) = parent_id.as_deref() {
         if project_record_by_id(&tx, parent, false)?.is_none() {
-            return Err(ApiError::new("INVALID_PARENT", "父项目不存在或已在回收站"));
+            return Err(ApiError::new(
+                "INVALID_PARENT",
+                "Parent project does not exist or is in Trash",
+            ));
         }
     }
     let sort_order = next_project_sort(&tx, parent_id.as_deref())?;
@@ -644,7 +671,7 @@ fn rename_project(
     let title = validate_title(title)?;
     let tx = begin_immediate(connection)?;
     let record = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, record.version)?;
     let now = now_utc();
     tx.execute(
@@ -664,7 +691,7 @@ fn set_project_expanded(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     if project_record_by_id(&tx, project_id, false)?.is_none() {
-        return Err(ApiError::new("NOT_FOUND", "项目不存在"));
+        return Err(ApiError::new("NOT_FOUND", "Project not found"));
     }
     tx.execute(
         "INSERT INTO project_ui_states(project_id,is_expanded) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET is_expanded=excluded.is_expanded",
@@ -709,7 +736,7 @@ fn reorder_project_siblings(
     if current != supplied || ordered_ids.len() != current.len() {
         return Err(ApiError::new(
             "REORDER_MEMBERSHIP_MISMATCH",
-            "排序列表必须包含同一层级的全部项目",
+            "Reorder list must include all projects in the same level",
         ));
     }
     let now = now_utc();
@@ -746,23 +773,26 @@ fn move_project(
     let source = by_id
         .get(project_id)
         .copied()
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, source.version)?;
     if let Some(target) = target_parent_id.as_deref() {
         if !by_id.contains_key(target) {
             return Err(ApiError::new(
                 "INVALID_PARENT",
-                "目标项目不存在或已在回收站",
+                "Target project does not exist or is in Trash",
             ));
         }
         let mut current = Some(target);
         let mut visited = HashSet::new();
         while let Some(id) = current {
             if id == project_id {
-                return Err(ApiError::new("INVALID_PARENT", "不能移动到自身或后代项目"));
+                return Err(ApiError::new(
+                    "INVALID_PARENT",
+                    "Cannot move a project into itself or its descendants",
+                ));
             }
             if !visited.insert(id) {
-                return Err(ApiError::new("DB_ERROR", "项目树关系存在循环"));
+                return Err(ApiError::new("DB_ERROR", "Project tree contains a cycle"));
             }
             current = by_id.get(id).and_then(|record| record.parent_id.as_deref());
         }
@@ -787,7 +817,7 @@ fn set_project_progress(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, record.version)?;
     let today = local_today();
     let date = match requested_date {
@@ -802,13 +832,13 @@ fn set_project_progress(
         if record.status != "active" {
             return Err(ApiError::new(
                 "INVALID_STATUS_TRANSITION",
-                "终止状态的项目不能新增推进",
+                "Cannot log new progress for a completed or canceled project",
             ));
         }
         if parsed > today {
             return Err(ApiError::new(
                 "FUTURE_DATE_FORBIDDEN",
-                "不能新增未来日期的推进",
+                "Cannot log progress for a future date",
             ));
         }
         tx.execute(
@@ -845,12 +875,12 @@ fn set_project_terminal(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "只有 active 项目可以完成或取消",
+            "Only active projects can be completed or canceled",
         ));
     }
     let today = date_string(local_today());
@@ -864,7 +894,9 @@ fn set_project_terminal(
     if let Some(last) = latest.as_deref().filter(|date| *date > today.as_str()) {
         return Err(ApiError::new(
             "TERMINAL_DATE_BEFORE_PROGRESS",
-            format!("终止日期不能早于最后推进日期（{last}），请先撤销该日期之后的推进记录"),
+            format!(
+                "End date cannot be earlier than the latest progress date ({last}). Remove later progress entries first."
+            ),
         )
         .with_details(serde_json::json!({ "latestProgressDate": last })));
     }
@@ -893,12 +925,12 @@ fn restore_project(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "项目已经是 active 状态",
+            "Project is already active",
         ));
     }
     tx.execute(
@@ -920,18 +952,18 @@ fn update_project_terminal_date(
     let requested = parse_date(date)?;
     let tx = begin_immediate(connection)?;
     let record = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "active 项目没有终止日期",
+            "Active projects do not have an end date",
         ));
     }
     if requested > local_today() {
         return Err(ApiError::new(
             "FUTURE_DATE_FORBIDDEN",
-            "终止日期不能是未来日期",
+            "End date cannot be in the future",
         ));
     }
     let latest: Option<String> = tx
@@ -944,7 +976,9 @@ fn update_project_terminal_date(
     if let Some(last) = latest.as_deref().filter(|last| *last > date) {
         return Err(ApiError::new(
             "TERMINAL_DATE_BEFORE_PROGRESS",
-            format!("终止日期不能早于最后推进日期（{last}），请先撤销该日期之后的推进记录"),
+            format!(
+                "End date cannot be earlier than the latest progress date ({last}). Remove later progress entries first."
+            ),
         )
         .with_details(serde_json::json!({ "latestProgressDate": last })));
     }
@@ -968,7 +1002,7 @@ fn update_project_terminal_date(
 
 fn get_reminder(connection: &Connection, reminder_id: &str) -> Result<DbResponse, ApiError> {
     let record = reminder_record_by_id(connection, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     Ok(DbResponse::Reminder(reminder_dto(&record)))
 }
 
@@ -983,7 +1017,7 @@ fn create_reminder(
     if date < local_today() {
         return Err(ApiError::new(
             "SCHEDULE_IN_PAST",
-            "计划日期必须是今天或未来",
+            "Scheduled date must be today or in the future",
         ));
     }
     let sort_order = next_reminder_sort(&tx, scheduled_date)?;
@@ -1008,7 +1042,7 @@ fn rename_reminder(
     let title = validate_title(title)?;
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     tx.execute(
         "UPDATE reminders SET title=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL",
@@ -1029,12 +1063,12 @@ fn update_reminder_schedule(
     let date = parse_date(scheduled_date)?;
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     if date < local_today() {
         return Err(ApiError::new(
             "SCHEDULE_IN_PAST",
-            "计划日期必须是今天或未来",
+            "Scheduled date must be today or in the future",
         ));
     }
     let sort_order = next_reminder_sort(&tx, scheduled_date)?;
@@ -1055,12 +1089,12 @@ fn complete_reminder(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "只有 active 提醒可以完成",
+            "Only active reminders can be completed",
         ));
     }
     let today = date_string(local_today());
@@ -1081,12 +1115,12 @@ fn cancel_reminder(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "只有 active 提醒可以取消",
+            "Only active reminders can be canceled",
         ));
     }
     tx.execute(
@@ -1106,12 +1140,12 @@ fn restore_reminder(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "提醒已经是 active 状态",
+            "Reminder is already active",
         ));
     }
     tx.execute(
@@ -1133,18 +1167,18 @@ fn update_reminder_completed_date(
     let requested = parse_date(date)?;
     let tx = begin_immediate(connection)?;
     let record = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     check_version(expected_version, record.version)?;
     if record.status != "completed" {
         return Err(ApiError::new(
             "INVALID_STATUS_TRANSITION",
-            "只有已完成提醒可以修改完成日期",
+            "Only completed reminders can update their completed date",
         ));
     }
     if requested > local_today() {
         return Err(ApiError::new(
             "FUTURE_DATE_FORBIDDEN",
-            "完成日期不能是未来日期",
+            "Completed date cannot be in the future",
         ));
     }
     tx.execute(
@@ -1184,7 +1218,7 @@ fn reorder_reminders(
     if expected != supplied || current.len() != ordered_ids.len() {
         return Err(ApiError::new(
             "REORDER_MEMBERSHIP_MISMATCH",
-            "排序列表必须包含该计划日的全部提醒",
+            "Reorder list must include all reminders for that scheduled date",
         ));
     }
     let now = now_utc();
@@ -1237,14 +1271,19 @@ fn project_parent_paths(records: &[ProjectRecord]) -> HashMap<String, Vec<String
 fn get_daily_week(connection: &Connection, week_start: &str) -> Result<DbResponse, ApiError> {
     let start = parse_date(week_start)?;
     if start.weekday().number_from_monday() != 1 {
-        return Err(ApiError::new("INVALID_DATE", "Daily 周起始日必须是周一"));
+        return Err(ApiError::new(
+            "INVALID_DATE",
+            "Week start date must be a Monday",
+        ));
     }
     let today = local_today();
     let mut dates = Vec::with_capacity(7);
     for offset in 0..7 {
         let day = start
             .checked_add_signed(Duration::days(offset))
-            .ok_or_else(|| ApiError::new("INVALID_DATE", "Daily 周范围超出可支持的日期范围"))?;
+            .ok_or_else(|| {
+                ApiError::new("INVALID_DATE", "Week range is outside supported dates")
+            })?;
         dates.push(date_string(day));
     }
     let records = load_project_records(connection, false)?;
@@ -1383,6 +1422,143 @@ fn get_daily_week(connection: &Connection, week_start: &str) -> Result<DbRespons
     }))
 }
 
+fn get_month_calendar(connection: &Connection, month: &str) -> Result<DbResponse, ApiError> {
+    let first_day = parse_month(month)?;
+    let next_month_first = if first_day.month() == 12 {
+        NaiveDate::from_ymd_opt(first_day.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(first_day.year(), first_day.month() + 1, 1)
+    }
+    .ok_or_else(|| ApiError::new("INVALID_DATE", "Month range is outside supported dates"))?;
+    let last_day = next_month_first
+        .checked_sub_signed(Duration::days(1))
+        .ok_or_else(|| ApiError::new("INVALID_DATE", "Month range is outside supported dates"))?;
+
+    let grid_start = first_day
+        .checked_sub_signed(Duration::days(
+            first_day.weekday().num_days_from_monday() as i64
+        ))
+        .ok_or_else(|| ApiError::new("INVALID_DATE", "Month range is outside supported dates"))?;
+    let grid_end = last_day
+        .checked_add_signed(Duration::days(
+            (6 - last_day.weekday().num_days_from_monday()) as i64,
+        ))
+        .ok_or_else(|| ApiError::new("INVALID_DATE", "Month range is outside supported dates"))?;
+
+    let total_days = (grid_end - grid_start).num_days() + 1;
+    let mut days = Vec::with_capacity(total_days as usize);
+    let mut day_indexes = HashMap::with_capacity(total_days as usize);
+    for offset in 0..total_days {
+        let current = grid_start
+            .checked_add_signed(Duration::days(offset))
+            .ok_or_else(|| {
+                ApiError::new("INVALID_DATE", "Month range is outside supported dates")
+            })?;
+        let iso = date_string(current);
+        day_indexes.insert(iso.clone(), days.len());
+        days.push(MonthDayDto {
+            in_current_month: iso.starts_with(month),
+            date: iso,
+            completed_project_count: 0,
+            progressed_project_count: 0,
+            planned_reminders: Vec::new(),
+            cross_day_completed_reminders: Vec::new(),
+        });
+    }
+
+    let records = load_project_records(connection, false)?;
+    let progress = load_progress_map(connection)?;
+    for record in &records {
+        let completed_on = if record.status == "completed" {
+            record.completed_date.as_deref()
+        } else {
+            None
+        };
+        if let Some(completed_date) = completed_on {
+            if let Some(&index) = day_indexes.get(completed_date) {
+                days[index].completed_project_count += 1;
+            }
+        }
+        if let Some(project_dates) = progress.get(&record.id) {
+            for progress_date in project_dates {
+                if let Some(&index) = day_indexes.get(progress_date) {
+                    if completed_on != Some(progress_date.as_str()) {
+                        days[index].progressed_project_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let today_str = date_string(local_today());
+    let mut overdue_reminders = Vec::new();
+    let reminders = load_reminder_records(connection)?;
+    for record in reminders {
+        let reminder = reminder_dto(&record);
+        if let Some(&index) = day_indexes.get(&record.scheduled_date) {
+            days[index].planned_reminders.push(ReminderDailyItem {
+                reminder: reminder.clone(),
+                display_type: "planned".to_string(),
+                is_planned_and_completed_same_day: record.status == "completed"
+                    && record.completed_date.as_deref() == Some(record.scheduled_date.as_str()),
+            });
+        }
+        if record.status == "completed" {
+            if let Some(completed_date) = &record.completed_date {
+                if completed_date != &record.scheduled_date {
+                    if let Some(&index) = day_indexes.get(completed_date) {
+                        days[index]
+                            .cross_day_completed_reminders
+                            .push(ReminderDailyItem {
+                                reminder: reminder.clone(),
+                                display_type: "completed".to_string(),
+                                is_planned_and_completed_same_day: false,
+                            });
+                    }
+                }
+            }
+        }
+        if record.status == "active" && record.scheduled_date < today_str {
+            overdue_reminders.push(ReminderDailyItem {
+                reminder,
+                display_type: "overdue".to_string(),
+                is_planned_and_completed_same_day: false,
+            });
+        }
+    }
+
+    for day in &mut days {
+        day.planned_reminders.sort_by(|a, b| {
+            a.reminder
+                .sort_order
+                .cmp(&b.reminder.sort_order)
+                .then(a.reminder.id.cmp(&b.reminder.id))
+        });
+        day.cross_day_completed_reminders.sort_by(|a, b| {
+            a.reminder
+                .completed_action_at
+                .cmp(&b.reminder.completed_action_at)
+                .then(a.reminder.id.cmp(&b.reminder.id))
+        });
+    }
+    overdue_reminders.sort_by(|a, b| {
+        a.reminder
+            .scheduled_date
+            .cmp(&b.reminder.scheduled_date)
+            .then(a.reminder.sort_order.cmp(&b.reminder.sort_order))
+            .then(a.reminder.id.cmp(&b.reminder.id))
+    });
+
+    Ok(DbResponse::MonthCalendar(MonthCalendarDto {
+        month: month.to_string(),
+        grid_start: date_string(grid_start),
+        grid_end: date_string(grid_end),
+        today: today_str,
+        overdue_reminders,
+        days,
+    }))
+}
+
 fn apply_short_ids(completed: &mut [ProjectDailyItem], progressed: &mut [ProjectDailyItem]) {
     let mut groups: HashMap<(Vec<String>, String), Vec<String>> = HashMap::new();
     for item in completed.iter().chain(progressed.iter()) {
@@ -1472,7 +1648,7 @@ fn preview_project_trash(
     project_id: &str,
 ) -> Result<DbResponse, ApiError> {
     if project_record_by_id(connection, project_id, false)?.is_none() {
-        return Err(ApiError::new("NOT_FOUND", "项目不存在"));
+        return Err(ApiError::new("NOT_FOUND", "Project not found"));
     }
     let active = active_descendant_count(connection, project_id)?;
     Ok(DbResponse::Preview {
@@ -1483,7 +1659,7 @@ fn preview_project_trash(
 fn trash_project(connection: &mut Connection, project_id: &str) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let root = project_record_by_id(&tx, project_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Project not found"))?;
     let active_count = active_descendant_count(&tx, project_id)?;
     let total_count = total_descendant_count(&tx, project_id)?;
     let entry_id = Uuid::new_v4().to_string();
@@ -1513,7 +1689,7 @@ fn trash_project(connection: &mut Connection, project_id: &str) -> Result<DbResp
 fn trash_reminder(connection: &mut Connection, reminder_id: &str) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let reminder = reminder_record_by_id(&tx, reminder_id, false)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Reminder not found"))?;
     let entry_id = Uuid::new_v4().to_string();
     let deleted_at = now_utc();
     tx.execute(
@@ -1540,7 +1716,10 @@ fn trash_reminder(connection: &mut Connection, reminder_id: &str) -> Result<DbRe
 
 fn list_trash(connection: &Connection, kind: &str) -> Result<DbResponse, ApiError> {
     if kind != "project" && kind != "reminder" {
-        return Err(ApiError::new("INVALID_STATUS_TRANSITION", "回收站分类无效"));
+        return Err(ApiError::new(
+            "INVALID_STATUS_TRANSITION",
+            "Invalid trash category",
+        ));
     }
     let mut statement = connection
         .prepare("SELECT id,kind,root_entity_id,title_snapshot,deleted_at,affected_count,NULL FROM trash_entries WHERE kind=?1 ORDER BY deleted_at DESC,id DESC")
@@ -1566,7 +1745,7 @@ fn restore_trash_entry(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let entry = trash_entry_by_id(&tx, entry_id)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "回收站条目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Trash entry not found"))?;
     let restored_count = if entry.kind == "project" {
         let parent: Option<Option<String>> = tx
             .query_row(
@@ -1587,7 +1766,10 @@ fn restore_trash_entry(
                 .map_err(db_error)?
                 .flatten();
             if parent_deleted.is_some() {
-                return Err(ApiError::new("PARENT_IN_TRASH", "请先恢复父项目"));
+                return Err(ApiError::new(
+                    "PARENT_IN_TRASH",
+                    "Restore the parent project first",
+                ));
             }
         }
         tx.execute(
@@ -1691,7 +1873,7 @@ fn permanently_delete_trash_entry(
 ) -> Result<DbResponse, ApiError> {
     let tx = begin_immediate(connection)?;
     let entry = trash_entry_by_id(&tx, entry_id)?
-        .ok_or_else(|| ApiError::new("NOT_FOUND", "回收站条目不存在"))?;
+        .ok_or_else(|| ApiError::new("NOT_FOUND", "Trash entry not found"))?;
     let mut projects = 0;
     let mut reminders = 0;
     if entry.kind == "project" {
@@ -1708,7 +1890,10 @@ fn permanently_delete_trash_entry(
 
 fn empty_trash(connection: &mut Connection, kind: &str) -> Result<DbResponse, ApiError> {
     if kind != "project" && kind != "reminder" {
-        return Err(ApiError::new("INVALID_STATUS_TRANSITION", "回收站分类无效"));
+        return Err(ApiError::new(
+            "INVALID_STATUS_TRANSITION",
+            "Invalid trash category",
+        ));
     }
     let tx = begin_immediate(connection)?;
     let entries: Vec<(String, String)> = {
@@ -1755,7 +1940,10 @@ fn get_app_settings(connection: &Connection) -> Result<DbResponse, ApiError> {
 
 fn set_theme_mode(connection: &mut Connection, mode: &str) -> Result<DbResponse, ApiError> {
     if !["light", "dark", "system"].contains(&mode) {
-        return Err(ApiError::new("INVALID_STATUS_TRANSITION", "主题模式无效"));
+        return Err(ApiError::new(
+            "INVALID_STATUS_TRANSITION",
+            "Invalid theme mode",
+        ));
     }
     let tx = begin_immediate(connection)?;
     tx.execute(
@@ -2348,6 +2536,131 @@ mod tests {
             Some(yesterday_str.as_str())
         );
         assert_eq!(updated.completed_action_at, original_action_at);
+    }
+
+    #[test]
+    fn month_calendar_builds_full_week_grid_and_aggregates_projects_and_reminders() {
+        let mut connection = test_connection();
+        let today = local_today();
+        let today_str = date_string(today);
+        let month_key = today_str[..7].to_string();
+        let yesterday_str = date_string(today - Duration::days(1));
+        let tomorrow_str = date_string(today + Duration::days(1));
+        let overdue_past_str = date_string(today - Duration::days(45));
+
+        let completed_and_progressed = expansion_test_project(&mut connection, "Alpha", None);
+        let progressed_only = expansion_test_project(&mut connection, "Beta", None);
+        set_project_progress(
+            &mut connection,
+            &completed_and_progressed,
+            Some(today_str.clone()),
+            true,
+            0,
+        )
+        .unwrap();
+        set_project_terminal(&mut connection, &completed_and_progressed, 1, "completed").unwrap();
+        set_project_progress(
+            &mut connection,
+            &progressed_only,
+            Some(today_str.clone()),
+            true,
+            0,
+        )
+        .unwrap();
+
+        let today_reminder =
+            match create_reminder(&mut connection, "Today task", &today_str).unwrap() {
+                DbResponse::Reminder(item) => item,
+                _ => panic!("unexpected reminder response"),
+            };
+        let tomorrow_reminder =
+            match create_reminder(&mut connection, "Early done", &tomorrow_str).unwrap() {
+                DbResponse::Reminder(item) => item,
+                _ => panic!("unexpected reminder response"),
+            };
+        complete_reminder(
+            &mut connection,
+            &tomorrow_reminder.id,
+            tomorrow_reminder.version,
+        )
+        .unwrap();
+
+        connection
+            .execute(
+                "INSERT INTO reminders(id,title,scheduled_date,status,sort_order,version,created_at,updated_at) VALUES(?1,?2,?3,'active',1024,0,?4,?4)",
+                params!["overdue-1", "Past due", overdue_past_str, now_utc()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reminders(id,title,scheduled_date,status,sort_order,version,created_at,updated_at) VALUES(?1,?2,?3,'active',1024,0,?4,?4)",
+                params!["overdue-2", "Yesterday due", yesterday_str, now_utc()],
+            )
+            .unwrap();
+
+        let calendar = match get_month_calendar(&connection, &month_key).unwrap() {
+            DbResponse::MonthCalendar(value) => value,
+            _ => panic!("unexpected month calendar response"),
+        };
+
+        assert_eq!(calendar.month, month_key);
+        assert_eq!(calendar.today, today_str);
+        assert_eq!(calendar.days.len() % 7, 0);
+        assert!(calendar.days.len() >= 28 && calendar.days.len() <= 42);
+        assert_eq!(
+            parse_date(&calendar.grid_start)
+                .unwrap()
+                .weekday()
+                .number_from_monday(),
+            1
+        );
+        assert_eq!(
+            parse_date(&calendar.grid_end)
+                .unwrap()
+                .weekday()
+                .number_from_monday(),
+            7
+        );
+
+        let today_cell = calendar
+            .days
+            .iter()
+            .find(|day| day.date == today_str)
+            .expect("today must be in current month grid");
+        assert!(today_cell.in_current_month);
+        assert_eq!(today_cell.completed_project_count, 1);
+        assert_eq!(today_cell.progressed_project_count, 1);
+        assert_eq!(today_cell.planned_reminders.len(), 1);
+        assert_eq!(
+            today_cell.planned_reminders[0].reminder.id,
+            today_reminder.id
+        );
+        assert_eq!(today_cell.cross_day_completed_reminders.len(), 1);
+        assert_eq!(
+            today_cell.cross_day_completed_reminders[0].reminder.id,
+            tomorrow_reminder.id
+        );
+
+        assert_eq!(calendar.overdue_reminders.len(), 2);
+        assert_eq!(calendar.overdue_reminders[0].reminder.id, "overdue-1");
+        assert_eq!(calendar.overdue_reminders[1].reminder.id, "overdue-2");
+
+        // Verify December-to-January cross-year month boundary and invalid input rejection.
+        let dec = match get_month_calendar(&connection, "2026-12").unwrap() {
+            DbResponse::MonthCalendar(value) => value,
+            _ => panic!("unexpected dec calendar response"),
+        };
+        assert_eq!(dec.grid_start, "2026-11-30");
+        assert_eq!(dec.grid_end, "2027-01-03");
+        assert_eq!(dec.days.len(), 35);
+        assert!(!dec.days[0].in_current_month);
+        assert!(dec.days[1].in_current_month);
+        assert!(!dec.days[34].in_current_month);
+
+        assert_eq!(
+            get_month_calendar(&connection, "2026-13").unwrap_err().code,
+            "INVALID_DATE"
+        );
     }
 
     fn test_connection() -> Connection {
