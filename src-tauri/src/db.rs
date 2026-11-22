@@ -1,23 +1,30 @@
 use crate::models::*;
 use chrono::{Datelike, Duration, Local, NaiveDate, Utc};
-use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row, Transaction};
+use rusqlite::{
+    params, Connection, ErrorCode, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc as std_mpsc;
+use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+struct DbHandleInner {
+    sender: Mutex<Option<mpsc::UnboundedSender<DbRequest>>>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
 #[derive(Clone)]
 pub struct DbHandle {
-    sender: mpsc::UnboundedSender<DbRequest>,
+    inner: Arc<DbHandleInner>,
 }
 
 impl DbHandle {
     pub fn start(path: PathBuf) -> Result<Self, ApiError> {
         let (sender, mut receiver) = mpsc::unbounded_channel::<DbRequest>();
         let (ready_sender, ready_receiver) = std_mpsc::sync_channel::<Result<(), String>>(1);
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("branchtrace-db".to_string())
             .spawn(move || match initialize_connection(&path) {
                 Ok(mut connection) => {
@@ -34,24 +41,73 @@ impl DbHandle {
             .map_err(|error| ApiError::new("DB_ERROR", format!("无法启动数据库线程: {error}")))?;
 
         match ready_receiver.recv() {
-            Ok(Ok(())) => Ok(Self { sender }),
-            Ok(Err(message)) => Err(ApiError::new("MIGRATION_ERROR", message)),
-            Err(error) => Err(ApiError::new(
-                "DB_ERROR",
-                format!("数据库线程启动失败: {error}"),
-            )),
+            Ok(Ok(())) => Ok(Self {
+                inner: Arc::new(DbHandleInner {
+                    sender: Mutex::new(Some(sender)),
+                    worker: Mutex::new(Some(worker)),
+                }),
+            }),
+            Ok(Err(message)) => {
+                let _ = worker.join();
+                Err(ApiError::new("MIGRATION_ERROR", message))
+            }
+            Err(error) => {
+                let _ = worker.join();
+                Err(ApiError::new(
+                    "DB_ERROR",
+                    format!("数据库线程启动失败: {error}"),
+                ))
+            }
         }
     }
 
     pub async fn request(&self, op: DbOp) -> Result<DbResponse, ApiError> {
+        let sender = {
+            let guard = self
+                .inner
+                .sender
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard
+                .clone()
+                .ok_or_else(|| ApiError::new("DB_ERROR", "数据库正在关闭"))?
+        };
         let (reply, receiver) = oneshot::channel();
-        self.sender
+        sender
             .send(DbRequest { op, reply })
             .map_err(|_| ApiError::new("DB_ERROR", "数据库线程已经停止"))?;
         receiver
             .await
             .map_err(|_| ApiError::new("DB_ERROR", "数据库操作没有返回结果"))?
     }
+
+    pub fn shutdown(&self) {
+        {
+            let mut guard = self
+                .inner
+                .sender
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.take();
+        }
+        let worker = {
+            let mut guard = self
+                .inner
+                .worker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.take()
+        };
+        if let Some(handle) = worker {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn begin_immediate(connection: &mut Connection) -> Result<Transaction<'_>, ApiError> {
+    connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)
 }
 
 fn initialize_connection(path: &PathBuf) -> Result<Connection, ApiError> {
@@ -373,24 +429,28 @@ fn tree_order(records: &[ProjectRecord]) -> Vec<ProjectRecord> {
     for children in groups.values_mut() {
         children.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
     }
-    fn visit(
-        parent: Option<String>,
-        groups: &HashMap<Option<String>, Vec<ProjectRecord>>,
-        out: &mut Vec<ProjectRecord>,
-    ) {
-        let children = groups.get(&parent).cloned().unwrap_or_default();
-        for child in children {
-            let id = child.id.clone();
-            out.push(child);
-            visit(Some(id), groups, out);
+    let mut result = Vec::with_capacity(records.len());
+    let mut visited = HashSet::with_capacity(records.len());
+    let mut stack: Vec<ProjectRecord> = Vec::new();
+    if let Some(roots) = groups.get(&None) {
+        for root in roots.iter().rev() {
+            stack.push(root.clone());
         }
     }
-    let mut result = Vec::new();
-    visit(None, &groups, &mut result);
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node.id.clone()) {
+            continue;
+        }
+        if let Some(children) = groups.get(&Some(node.id.clone())) {
+            for child in children.iter().rev() {
+                stack.push(child.clone());
+            }
+        }
+        result.push(node);
+    }
     if result.len() != records.len() {
-        let known: HashSet<String> = result.iter().map(|record| record.id.clone()).collect();
         for record in records {
-            if !known.contains(&record.id) {
+            if visited.insert(record.id.clone()) {
                 result.push(record.clone());
             }
         }
@@ -551,26 +611,28 @@ fn create_project(
     parent_id: Option<String>,
 ) -> Result<DbResponse, ApiError> {
     let title = validate_title(title)?;
+    let tx = begin_immediate(connection)?;
     if let Some(parent) = parent_id.as_deref() {
-        if project_record_by_id(connection, parent, false)?.is_none() {
+        if project_record_by_id(&tx, parent, false)?.is_none() {
             return Err(ApiError::new("INVALID_PARENT", "父项目不存在或已在回收站"));
         }
     }
-    let sort_order = next_project_sort(connection, parent_id.as_deref())?;
+    let sort_order = next_project_sort(&tx, parent_id.as_deref())?;
     let id = Uuid::new_v4().to_string();
     let now = now_utc();
-    let tx = connection.transaction().map_err(db_error)?;
     tx.execute(
         "INSERT INTO projects(id,parent_id,title,status,sort_order,version,created_at,updated_at) VALUES(?1,?2,?3,'active',?4,0,?5,?5)",
         params![id, parent_id, title, sort_order, now],
-    ).map_err(db_error)?;
+    )
+    .map_err(db_error)?;
     tx.execute(
         "INSERT INTO project_ui_states(project_id,is_expanded) VALUES(?1,1)",
         params![id],
     )
     .map_err(db_error)?;
+    let dto = project_dto_by_id(&tx, &id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(connection, &id)?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn rename_project(
@@ -580,16 +642,19 @@ fn rename_project(
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
     let title = validate_title(title)?;
-    let record = project_record_by_id(connection, project_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, record.version)?;
     let now = now_utc();
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE projects SET title=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL", params![title, now, project_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE projects SET title=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL",
+        params![title, now, project_id],
+    )
+    .map_err(db_error)?;
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn set_project_expanded(
@@ -597,23 +662,25 @@ fn set_project_expanded(
     project_id: &str,
     is_expanded: bool,
 ) -> Result<DbResponse, ApiError> {
-    if project_record_by_id(connection, project_id, false)?.is_none() {
+    let tx = begin_immediate(connection)?;
+    if project_record_by_id(&tx, project_id, false)?.is_none() {
         return Err(ApiError::new("NOT_FOUND", "项目不存在"));
     }
-    connection.execute(
+    tx.execute(
         "INSERT INTO project_ui_states(project_id,is_expanded) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET is_expanded=excluded.is_expanded",
         params![project_id, if is_expanded { 1 } else { 0 }],
-    ).map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    )
+    .map_err(db_error)?;
+    let dto = project_dto_by_id(&tx, project_id)?;
+    tx.commit().map_err(db_error)?;
+    Ok(DbResponse::Project(dto))
 }
 
 fn set_all_projects_expanded(
     connection: &mut Connection,
     is_expanded: bool,
 ) -> Result<DbResponse, ApiError> {
-    let tx = connection.transaction().map_err(db_error)?;
+    let tx = begin_immediate(connection)?;
     tx.execute(
         "INSERT INTO project_ui_states(project_id,is_expanded) SELECT id,?1 FROM projects WHERE deleted_at IS NULL ON CONFLICT(project_id) DO UPDATE SET is_expanded=excluded.is_expanded",
         params![if is_expanded { 1 } else { 0 }],
@@ -629,7 +696,8 @@ fn reorder_project_siblings(
     parent_id: Option<String>,
     ordered_ids: Vec<String>,
 ) -> Result<DbResponse, ApiError> {
-    let records = load_project_records(connection, false)?;
+    let tx = begin_immediate(connection)?;
+    let records = load_project_records(&tx, false)?;
     let mut current: Vec<String> = records
         .iter()
         .filter(|record| record.parent_id == parent_id)
@@ -644,18 +712,22 @@ fn reorder_project_siblings(
             "排序列表必须包含同一层级的全部项目",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
+    let now = now_utc();
     for (index, id) in ordered_ids.iter().enumerate() {
-        tx.execute("UPDATE projects SET sort_order=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL", params![(index as i64 + 1) * 1024, now_utc(), id]).map_err(db_error)?;
+        tx.execute(
+            "UPDATE projects SET sort_order=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL",
+            params![(index as i64 + 1) * 1024, now, id],
+        )
+        .map_err(db_error)?;
     }
-    tx.commit().map_err(db_error)?;
-    let progress = load_progress_map(connection)?;
+    let progress = load_progress_map(&tx)?;
     let mut result = Vec::new();
     for id in ordered_ids {
-        if let Some(record) = project_record_by_id(connection, &id, false)? {
+        if let Some(record) = project_record_by_id(&tx, &id, false)? {
             result.push(project_dto(&record, &progress));
         }
     }
+    tx.commit().map_err(db_error)?;
     Ok(DbResponse::Projects(result))
 }
 
@@ -665,37 +737,45 @@ fn move_project(
     target_parent_id: Option<String>,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let records = load_project_records(connection, false)?;
-    let source = records
+    let tx = begin_immediate(connection)?;
+    let records = load_project_records(&tx, false)?;
+    let by_id: HashMap<&str, &ProjectRecord> = records
         .iter()
-        .find(|record| record.id == project_id)
+        .map(|record| (record.id.as_str(), record))
+        .collect();
+    let source = by_id
+        .get(project_id)
+        .copied()
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, source.version)?;
     if let Some(target) = target_parent_id.as_deref() {
-        if records.iter().all(|record| record.id != target) {
+        if !by_id.contains_key(target) {
             return Err(ApiError::new(
                 "INVALID_PARENT",
                 "目标项目不存在或已在回收站",
             ));
         }
-        let mut current = Some(target.to_string());
+        let mut current = Some(target);
+        let mut visited = HashSet::new();
         while let Some(id) = current {
             if id == project_id {
                 return Err(ApiError::new("INVALID_PARENT", "不能移动到自身或后代项目"));
             }
-            current = records
-                .iter()
-                .find(|record| record.id == id)
-                .and_then(|record| record.parent_id.clone());
+            if !visited.insert(id) {
+                return Err(ApiError::new("DB_ERROR", "项目树关系存在循环"));
+            }
+            current = by_id.get(id).and_then(|record| record.parent_id.as_deref());
         }
     }
-    let sort_order = next_project_sort(connection, target_parent_id.as_deref())?;
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE projects SET parent_id=?1,sort_order=?2,version=version+1,updated_at=?3 WHERE id=?4 AND deleted_at IS NULL", params![target_parent_id, sort_order, now_utc(), project_id]).map_err(db_error)?;
+    let sort_order = next_project_sort(&tx, target_parent_id.as_deref())?;
+    tx.execute(
+        "UPDATE projects SET parent_id=?1,sort_order=?2,version=version+1,updated_at=?3 WHERE id=?4 AND deleted_at IS NULL",
+        params![target_parent_id, sort_order, now_utc(), project_id],
+    )
+    .map_err(db_error)?;
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn set_project_progress(
@@ -705,7 +785,8 @@ fn set_project_progress(
     present: bool,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = project_record_by_id(connection, project_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, record.version)?;
     let today = local_today();
@@ -717,7 +798,6 @@ fn set_project_progress(
         None => date_string(today),
     };
     let parsed = parse_date(&date)?;
-    let tx = connection.transaction().map_err(db_error)?;
     let changed = if present {
         if record.status != "active" {
             return Err(ApiError::new(
@@ -731,7 +811,12 @@ fn set_project_progress(
                 "不能新增未来日期的推进",
             ));
         }
-        tx.execute("INSERT OR IGNORE INTO progress_records(project_id,progress_date,created_at) VALUES(?1,?2,?3)", params![project_id, date, now_utc()]).map_err(db_error)? > 0
+        tx.execute(
+            "INSERT OR IGNORE INTO progress_records(project_id,progress_date,created_at) VALUES(?1,?2,?3)",
+            params![project_id, date, now_utc()],
+        )
+        .map_err(db_error)?
+            > 0
     } else {
         tx.execute(
             "DELETE FROM progress_records WHERE project_id=?1 AND progress_date=?2",
@@ -747,10 +832,9 @@ fn set_project_progress(
         )
         .map_err(db_error)?;
     }
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn set_project_terminal(
@@ -759,7 +843,8 @@ fn set_project_terminal(
     expected_version: i64,
     status: &str,
 ) -> Result<DbResponse, ApiError> {
-    let record = project_record_by_id(connection, project_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
@@ -769,29 +854,36 @@ fn set_project_terminal(
         ));
     }
     let today = date_string(local_today());
-    let latest: Option<String> = connection
+    let latest: Option<String> = tx
         .query_row(
             "SELECT MAX(progress_date) FROM progress_records WHERE project_id=?1",
             params![project_id],
             |row| row.get(0),
         )
         .map_err(db_error)?;
-    if latest.as_deref().is_some_and(|date| date > today.as_str()) {
+    if let Some(last) = latest.as_deref().filter(|date| *date > today.as_str()) {
         return Err(ApiError::new(
             "TERMINAL_DATE_BEFORE_PROGRESS",
-            "终止日期不能早于最后推进日期",
-        ));
+            format!("终止日期不能早于最后推进日期（{last}），请先撤销该日期之后的推进记录"),
+        )
+        .with_details(serde_json::json!({ "latestProgressDate": last })));
     }
-    let tx = connection.transaction().map_err(db_error)?;
     if status == "completed" {
-        tx.execute("UPDATE projects SET status='completed',completed_date=?1,canceled_date=NULL,version=version+1,updated_at=?2 WHERE id=?3", params![today, now_utc(), project_id]).map_err(db_error)?;
+        tx.execute(
+            "UPDATE projects SET status='completed',completed_date=?1,canceled_date=NULL,version=version+1,updated_at=?2 WHERE id=?3",
+            params![today, now_utc(), project_id],
+        )
+        .map_err(db_error)?;
     } else {
-        tx.execute("UPDATE projects SET status='canceled',completed_date=NULL,canceled_date=?1,version=version+1,updated_at=?2 WHERE id=?3", params![today, now_utc(), project_id]).map_err(db_error)?;
+        tx.execute(
+            "UPDATE projects SET status='canceled',completed_date=NULL,canceled_date=?1,version=version+1,updated_at=?2 WHERE id=?3",
+            params![today, now_utc(), project_id],
+        )
+        .map_err(db_error)?;
     }
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn restore_project(
@@ -799,7 +891,8 @@ fn restore_project(
     project_id: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = project_record_by_id(connection, project_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
@@ -808,12 +901,14 @@ fn restore_project(
             "项目已经是 active 状态",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE projects SET status='active',completed_date=NULL,canceled_date=NULL,version=version+1,updated_at=?1 WHERE id=?2", params![now_utc(), project_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE projects SET status='active',completed_date=NULL,canceled_date=NULL,version=version+1,updated_at=?1 WHERE id=?2",
+        params![now_utc(), project_id],
+    )
+    .map_err(db_error)?;
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn update_project_terminal_date(
@@ -822,7 +917,9 @@ fn update_project_terminal_date(
     date: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = project_record_by_id(connection, project_id, false)?
+    let requested = parse_date(date)?;
+    let tx = begin_immediate(connection)?;
+    let record = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
@@ -831,27 +928,26 @@ fn update_project_terminal_date(
             "active 项目没有终止日期",
         ));
     }
-    let requested = parse_date(date)?;
     if requested > local_today() {
         return Err(ApiError::new(
             "FUTURE_DATE_FORBIDDEN",
             "终止日期不能是未来日期",
         ));
     }
-    let latest: Option<String> = connection
+    let latest: Option<String> = tx
         .query_row(
             "SELECT MAX(progress_date) FROM progress_records WHERE project_id=?1",
             params![project_id],
             |row| row.get(0),
         )
         .map_err(db_error)?;
-    if latest.as_deref().is_some_and(|last| last > date) {
+    if let Some(last) = latest.as_deref().filter(|last| *last > date) {
         return Err(ApiError::new(
             "TERMINAL_DATE_BEFORE_PROGRESS",
-            "终止日期不能早于最后推进日期",
-        ));
+            format!("终止日期不能早于最后推进日期（{last}），请先撤销该日期之后的推进记录"),
+        )
+        .with_details(serde_json::json!({ "latestProgressDate": last })));
     }
-    let tx = connection.transaction().map_err(db_error)?;
     if record.status == "completed" {
         tx.execute(
             "UPDATE projects SET completed_date=?1,version=version+1,updated_at=?2 WHERE id=?3",
@@ -865,11 +961,9 @@ fn update_project_terminal_date(
         )
         .map_err(db_error)?;
     }
+    let dto = project_dto_by_id(&tx, project_id)?;
     tx.commit().map_err(db_error)?;
-    let _ = requested;
-    Ok(DbResponse::Project(project_dto_by_id(
-        connection, project_id,
-    )?))
+    Ok(DbResponse::Project(dto))
 }
 
 fn get_reminder(connection: &Connection, reminder_id: &str) -> Result<DbResponse, ApiError> {
@@ -885,22 +979,24 @@ fn create_reminder(
 ) -> Result<DbResponse, ApiError> {
     let title = validate_title(title)?;
     let date = parse_date(scheduled_date)?;
+    let tx = begin_immediate(connection)?;
     if date < local_today() {
         return Err(ApiError::new(
             "SCHEDULE_IN_PAST",
             "计划日期必须是今天或未来",
         ));
     }
-    let sort_order = next_reminder_sort(connection, scheduled_date)?;
+    let sort_order = next_reminder_sort(&tx, scheduled_date)?;
     let id = Uuid::new_v4().to_string();
     let now = now_utc();
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("INSERT INTO reminders(id,title,scheduled_date,status,sort_order,version,created_at,updated_at) VALUES(?1,?2,?3,'active',?4,0,?5,?5)", params![id, title, scheduled_date, sort_order, now]).map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO reminders(id,title,scheduled_date,status,sort_order,version,created_at,updated_at) VALUES(?1,?2,?3,'active',?4,0,?5,?5)",
+        params![id, title, scheduled_date, sort_order, now],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, &id)?;
     tx.commit().map_err(db_error)?;
-    Ok(DbResponse::Reminder(reminder_dto(
-        &reminder_record_by_id(connection, &id, false)?
-            .ok_or_else(|| ApiError::new("DB_ERROR", "创建提醒后无法读取"))?,
-    )))
+    Ok(result)
 }
 
 fn rename_reminder(
@@ -910,13 +1006,18 @@ fn rename_reminder(
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
     let title = validate_title(title)?;
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE reminders SET title=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL", params![title, now_utc(), reminder_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE reminders SET title=?1,version=version+1,updated_at=?2 WHERE id=?3 AND deleted_at IS NULL",
+        params![title, now_utc(), reminder_id],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn update_reminder_schedule(
@@ -925,21 +1026,26 @@ fn update_reminder_schedule(
     scheduled_date: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let date = parse_date(scheduled_date)?;
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
-    let date = parse_date(scheduled_date)?;
     if date < local_today() {
         return Err(ApiError::new(
             "SCHEDULE_IN_PAST",
             "计划日期必须是今天或未来",
         ));
     }
-    let sort_order = next_reminder_sort(connection, scheduled_date)?;
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE reminders SET scheduled_date=?1,sort_order=?2,version=version+1,updated_at=?3 WHERE id=?4 AND deleted_at IS NULL", params![scheduled_date, sort_order, now_utc(), reminder_id]).map_err(db_error)?;
+    let sort_order = next_reminder_sort(&tx, scheduled_date)?;
+    tx.execute(
+        "UPDATE reminders SET scheduled_date=?1,sort_order=?2,version=version+1,updated_at=?3 WHERE id=?4 AND deleted_at IS NULL",
+        params![scheduled_date, sort_order, now_utc(), reminder_id],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn complete_reminder(
@@ -947,7 +1053,8 @@ fn complete_reminder(
     reminder_id: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
@@ -957,10 +1064,14 @@ fn complete_reminder(
         ));
     }
     let today = date_string(local_today());
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE reminders SET status='completed',completed_date=?1,completed_action_at=?2,canceled_date=NULL,version=version+1,updated_at=?2 WHERE id=?3", params![today, now_utc(), reminder_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE reminders SET status='completed',completed_date=?1,completed_action_at=?2,canceled_date=NULL,version=version+1,updated_at=?2 WHERE id=?3",
+        params![today, now_utc(), reminder_id],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn cancel_reminder(
@@ -968,7 +1079,8 @@ fn cancel_reminder(
     reminder_id: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status != "active" {
@@ -977,10 +1089,14 @@ fn cancel_reminder(
             "只有 active 提醒可以取消",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE reminders SET status='canceled',completed_date=NULL,completed_action_at=NULL,canceled_date=?1,version=version+1,updated_at=?2 WHERE id=?3", params![date_string(local_today()), now_utc(), reminder_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE reminders SET status='canceled',completed_date=NULL,completed_action_at=NULL,canceled_date=?1,version=version+1,updated_at=?2 WHERE id=?3",
+        params![date_string(local_today()), now_utc(), reminder_id],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn restore_reminder(
@@ -988,7 +1104,8 @@ fn restore_reminder(
     reminder_id: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status == "active" {
@@ -997,10 +1114,14 @@ fn restore_reminder(
             "提醒已经是 active 状态",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("UPDATE reminders SET status='active',completed_date=NULL,completed_action_at=NULL,canceled_date=NULL,version=version+1,updated_at=?1 WHERE id=?2", params![now_utc(), reminder_id]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE reminders SET status='active',completed_date=NULL,completed_action_at=NULL,canceled_date=NULL,version=version+1,updated_at=?1 WHERE id=?2",
+        params![now_utc(), reminder_id],
+    )
+    .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn update_reminder_completed_date(
@@ -1009,7 +1130,9 @@ fn update_reminder_completed_date(
     date: &str,
     expected_version: i64,
 ) -> Result<DbResponse, ApiError> {
-    let record = reminder_record_by_id(connection, reminder_id, false)?
+    let requested = parse_date(date)?;
+    let tx = begin_immediate(connection)?;
+    let record = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     check_version(expected_version, record.version)?;
     if record.status != "completed" {
@@ -1018,22 +1141,20 @@ fn update_reminder_completed_date(
             "只有已完成提醒可以修改完成日期",
         ));
     }
-    let requested = parse_date(date)?;
     if requested > local_today() {
         return Err(ApiError::new(
             "FUTURE_DATE_FORBIDDEN",
             "完成日期不能是未来日期",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
     tx.execute(
         "UPDATE reminders SET completed_date=?1,version=version+1,updated_at=?2 WHERE id=?3",
         params![date, now_utc(), reminder_id],
     )
     .map_err(db_error)?;
+    let result = get_reminder(&tx, reminder_id)?;
     tx.commit().map_err(db_error)?;
-    let _ = requested;
-    get_reminder(connection, reminder_id)
+    Ok(result)
 }
 
 fn reorder_reminders(
@@ -1042,8 +1163,11 @@ fn reorder_reminders(
     ordered_ids: Vec<String>,
 ) -> Result<DbResponse, ApiError> {
     parse_date(scheduled_date)?;
+    let tx = begin_immediate(connection)?;
     let current: Vec<String> = {
-        let mut statement = connection.prepare("SELECT id FROM reminders WHERE scheduled_date=?1 AND deleted_at IS NULL ORDER BY sort_order,id").map_err(db_error)?;
+        let mut statement = tx
+            .prepare("SELECT id FROM reminders WHERE scheduled_date=?1 AND deleted_at IS NULL ORDER BY sort_order,id")
+            .map_err(db_error)?;
         let rows = statement
             .query_map(params![scheduled_date], |row| row.get::<_, String>(0))
             .map_err(db_error)?;
@@ -1063,17 +1187,21 @@ fn reorder_reminders(
             "排序列表必须包含该计划日的全部提醒",
         ));
     }
-    let tx = connection.transaction().map_err(db_error)?;
+    let now = now_utc();
     for (index, id) in ordered_ids.iter().enumerate() {
-        tx.execute("UPDATE reminders SET sort_order=?1,version=version+1,updated_at=?2 WHERE id=?3 AND scheduled_date=?4 AND deleted_at IS NULL", params![(index as i64 + 1) * 1024, now_utc(), id, scheduled_date]).map_err(db_error)?;
+        tx.execute(
+            "UPDATE reminders SET sort_order=?1,version=version+1,updated_at=?2 WHERE id=?3 AND scheduled_date=?4 AND deleted_at IS NULL",
+            params![(index as i64 + 1) * 1024, now, id, scheduled_date],
+        )
+        .map_err(db_error)?;
     }
-    tx.commit().map_err(db_error)?;
     let mut result = Vec::new();
     for id in ordered_ids {
-        if let Some(record) = reminder_record_by_id(connection, &id, false)? {
+        if let Some(record) = reminder_record_by_id(&tx, &id, false)? {
             result.push(reminder_dto(&record));
         }
     }
+    tx.commit().map_err(db_error)?;
     Ok(DbResponse::Reminders(result))
 }
 
@@ -1300,18 +1428,6 @@ fn load_reminder_records(connection: &Connection) -> Result<Vec<ReminderRecord>,
     Ok(result)
 }
 
-fn descendant_ids(connection: &Connection, root_id: &str) -> Result<Vec<String>, ApiError> {
-    let mut statement = connection.prepare("WITH RECURSIVE descendants(id) AS (SELECT id FROM projects WHERE id=?1 UNION ALL SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id) SELECT id FROM descendants").map_err(db_error)?;
-    let rows = statement
-        .query_map(params![root_id], |row| row.get::<_, String>(0))
-        .map_err(db_error)?;
-    let mut ids = Vec::new();
-    for row in rows {
-        ids.push(row.map_err(db_error)?);
-    }
-    Ok(ids)
-}
-
 fn trash_entry_from_row(row: &Row<'_>) -> rusqlite::Result<TrashEntryDto> {
     Ok(TrashEntryDto {
         id: row.get(0)?,
@@ -1331,6 +1447,26 @@ fn trash_entry_by_id(
     connection.query_row("SELECT id,kind,root_entity_id,title_snapshot,deleted_at,affected_count,NULL FROM trash_entries WHERE id=?1", params![entry_id], trash_entry_from_row).optional().map_err(db_error)
 }
 
+fn active_descendant_count(connection: &Connection, root_id: &str) -> Result<i64, ApiError> {
+    connection
+        .query_row(
+            "WITH RECURSIVE descendants(id) AS (SELECT id FROM projects WHERE id=?1 UNION ALL SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id) SELECT COUNT(*) FROM descendants d JOIN projects p ON p.id=d.id WHERE p.deleted_at IS NULL",
+            params![root_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)
+}
+
+fn total_descendant_count(connection: &Connection, root_id: &str) -> Result<i64, ApiError> {
+    connection
+        .query_row(
+            "WITH RECURSIVE descendants(id) AS (SELECT id FROM projects WHERE id=?1 UNION ALL SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id) SELECT COUNT(*) FROM descendants",
+            params![root_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)
+}
+
 fn preview_project_trash(
     connection: &Connection,
     project_id: &str,
@@ -1338,39 +1474,30 @@ fn preview_project_trash(
     if project_record_by_id(connection, project_id, false)?.is_none() {
         return Err(ApiError::new("NOT_FOUND", "项目不存在"));
     }
-    let ids = descendant_ids(connection, project_id)?;
-    let records = load_project_records(connection, true)?;
-    let active = ids
-        .iter()
-        .filter(|id| {
-            records
-                .iter()
-                .any(|record| &record.id == *id && record.deleted_at.is_none())
-        })
-        .count() as i64;
+    let active = active_descendant_count(connection, project_id)?;
     Ok(DbResponse::Preview {
         active_node_count: active,
     })
 }
 
 fn trash_project(connection: &mut Connection, project_id: &str) -> Result<DbResponse, ApiError> {
-    let root = project_record_by_id(connection, project_id, false)?
+    let tx = begin_immediate(connection)?;
+    let root = project_record_by_id(&tx, project_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "项目不存在"))?;
-    let ids = descendant_ids(connection, project_id)?;
-    let records = load_project_records(connection, true)?;
-    let active_count = ids
-        .iter()
-        .filter(|id| {
-            records
-                .iter()
-                .any(|record| &record.id == *id && record.deleted_at.is_none())
-        })
-        .count() as i64;
+    let active_count = active_descendant_count(&tx, project_id)?;
+    let total_count = total_descendant_count(&tx, project_id)?;
     let entry_id = Uuid::new_v4().to_string();
     let deleted_at = now_utc();
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("INSERT INTO trash_entries(id,kind,root_entity_id,title_snapshot,affected_count,deleted_at) VALUES(?1,'project',?2,?3,?4,?5)", params![entry_id, project_id, root.title, active_count, deleted_at]).map_err(db_error)?;
-    tx.execute("WITH RECURSIVE descendants(id) AS (SELECT id FROM projects WHERE id=?1 UNION ALL SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id) UPDATE projects SET deleted_at=?2,trash_entry_id=?3,version=version+1,updated_at=?2 WHERE id IN (SELECT id FROM descendants) AND deleted_at IS NULL", params![project_id, deleted_at, entry_id]).map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO trash_entries(id,kind,root_entity_id,title_snapshot,affected_count,deleted_at) VALUES(?1,'project',?2,?3,?4,?5)",
+        params![entry_id, project_id, root.title, active_count, deleted_at],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "WITH RECURSIVE descendants(id) AS (SELECT id FROM projects WHERE id=?1 UNION ALL SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id) UPDATE projects SET deleted_at=?2,trash_entry_id=?3,version=version+1,updated_at=?2 WHERE id IN (SELECT id FROM descendants) AND deleted_at IS NULL",
+        params![project_id, deleted_at, entry_id],
+    )
+    .map_err(db_error)?;
     tx.commit().map_err(db_error)?;
     Ok(DbResponse::TrashEntry(TrashEntryDto {
         id: entry_id,
@@ -1379,18 +1506,26 @@ fn trash_project(connection: &mut Connection, project_id: &str) -> Result<DbResp
         title_snapshot: root.title,
         deleted_at,
         affected_count_at_delete: active_count,
-        current_descendant_count: Some(ids.len() as i64),
+        current_descendant_count: Some(total_count),
     }))
 }
 
 fn trash_reminder(connection: &mut Connection, reminder_id: &str) -> Result<DbResponse, ApiError> {
-    let reminder = reminder_record_by_id(connection, reminder_id, false)?
+    let tx = begin_immediate(connection)?;
+    let reminder = reminder_record_by_id(&tx, reminder_id, false)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "提醒不存在"))?;
     let entry_id = Uuid::new_v4().to_string();
     let deleted_at = now_utc();
-    let tx = connection.transaction().map_err(db_error)?;
-    tx.execute("INSERT INTO trash_entries(id,kind,root_entity_id,title_snapshot,affected_count,deleted_at) VALUES(?1,'reminder',?2,?3,1,?4)", params![entry_id, reminder_id, reminder.title, deleted_at]).map_err(db_error)?;
-    tx.execute("UPDATE reminders SET deleted_at=?1,trash_entry_id=?2,version=version+1,updated_at=?1 WHERE id=?3 AND deleted_at IS NULL", params![deleted_at, entry_id, reminder_id]).map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO trash_entries(id,kind,root_entity_id,title_snapshot,affected_count,deleted_at) VALUES(?1,'reminder',?2,?3,1,?4)",
+        params![entry_id, reminder_id, reminder.title, deleted_at],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "UPDATE reminders SET deleted_at=?1,trash_entry_id=?2,version=version+1,updated_at=?1 WHERE id=?3 AND deleted_at IS NULL",
+        params![deleted_at, entry_id, reminder_id],
+    )
+    .map_err(db_error)?;
     tx.commit().map_err(db_error)?;
     Ok(DbResponse::TrashEntry(TrashEntryDto {
         id: entry_id,
@@ -1407,7 +1542,9 @@ fn list_trash(connection: &Connection, kind: &str) -> Result<DbResponse, ApiErro
     if kind != "project" && kind != "reminder" {
         return Err(ApiError::new("INVALID_STATUS_TRANSITION", "回收站分类无效"));
     }
-    let mut statement = connection.prepare("SELECT id,kind,root_entity_id,title_snapshot,deleted_at,affected_count,NULL FROM trash_entries WHERE kind=?1 ORDER BY deleted_at DESC,id DESC").map_err(db_error)?;
+    let mut statement = connection
+        .prepare("SELECT id,kind,root_entity_id,title_snapshot,deleted_at,affected_count,NULL FROM trash_entries WHERE kind=?1 ORDER BY deleted_at DESC,id DESC")
+        .map_err(db_error)?;
     let rows = statement
         .query_map(params![kind], trash_entry_from_row)
         .map_err(db_error)?;
@@ -1416,7 +1553,7 @@ fn list_trash(connection: &Connection, kind: &str) -> Result<DbResponse, ApiErro
         let mut entry = row.map_err(db_error)?;
         if kind == "project" {
             entry.current_descendant_count =
-                Some(descendant_ids(connection, &entry.root_entity_id)?.len() as i64);
+                Some(total_descendant_count(connection, &entry.root_entity_id)?);
         }
         result.push(entry);
     }
@@ -1427,9 +1564,9 @@ fn restore_trash_entry(
     connection: &mut Connection,
     entry_id: &str,
 ) -> Result<DbResponse, ApiError> {
-    let entry = trash_entry_by_id(connection, entry_id)?
+    let tx = begin_immediate(connection)?;
+    let entry = trash_entry_by_id(&tx, entry_id)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "回收站条目不存在"))?;
-    let tx = connection.transaction().map_err(db_error)?;
     let restored_count = if entry.kind == "project" {
         let parent: Option<Option<String>> = tx
             .query_row(
@@ -1453,9 +1590,17 @@ fn restore_trash_entry(
                 return Err(ApiError::new("PARENT_IN_TRASH", "请先恢复父项目"));
             }
         }
-        tx.execute("UPDATE projects SET deleted_at=NULL,trash_entry_id=NULL,version=version+1,updated_at=?2 WHERE trash_entry_id=?1", params![entry_id, now_utc()]).map_err(db_error)? as i64
+        tx.execute(
+            "UPDATE projects SET deleted_at=NULL,trash_entry_id=NULL,version=version+1,updated_at=?2 WHERE trash_entry_id=?1",
+            params![entry_id, now_utc()],
+        )
+        .map_err(db_error)? as i64
     } else {
-        tx.execute("UPDATE reminders SET deleted_at=NULL,trash_entry_id=NULL,version=version+1,updated_at=?2 WHERE trash_entry_id=?1", params![entry_id, now_utc()]).map_err(db_error)? as i64
+        tx.execute(
+            "UPDATE reminders SET deleted_at=NULL,trash_entry_id=NULL,version=version+1,updated_at=?2 WHERE trash_entry_id=?1",
+            params![entry_id, now_utc()],
+        )
+        .map_err(db_error)? as i64
     };
     tx.execute("DELETE FROM trash_entries WHERE id=?1", params![entry_id])
         .map_err(db_error)?;
@@ -1544,9 +1689,9 @@ fn permanently_delete_trash_entry(
     connection: &mut Connection,
     entry_id: &str,
 ) -> Result<DbResponse, ApiError> {
-    let entry = trash_entry_by_id(connection, entry_id)?
+    let tx = begin_immediate(connection)?;
+    let entry = trash_entry_by_id(&tx, entry_id)?
         .ok_or_else(|| ApiError::new("NOT_FOUND", "回收站条目不存在"))?;
-    let tx = connection.transaction().map_err(db_error)?;
     let mut projects = 0;
     let mut reminders = 0;
     if entry.kind == "project" {
@@ -1565,8 +1710,11 @@ fn empty_trash(connection: &mut Connection, kind: &str) -> Result<DbResponse, Ap
     if kind != "project" && kind != "reminder" {
         return Err(ApiError::new("INVALID_STATUS_TRANSITION", "回收站分类无效"));
     }
+    let tx = begin_immediate(connection)?;
     let entries: Vec<(String, String)> = {
-        let mut statement = connection.prepare("SELECT kind,root_entity_id FROM trash_entries WHERE kind=?1 ORDER BY deleted_at,id").map_err(db_error)?;
+        let mut statement = tx
+            .prepare("SELECT kind,root_entity_id FROM trash_entries WHERE kind=?1 ORDER BY deleted_at,id")
+            .map_err(db_error)?;
         let rows = statement
             .query_map(params![kind], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(db_error)?;
@@ -1576,7 +1724,6 @@ fn empty_trash(connection: &mut Connection, kind: &str) -> Result<DbResponse, Ap
         }
         values
     };
-    let tx = connection.transaction().map_err(db_error)?;
     let mut projects = 0;
     let mut reminders = 0;
     for (entry_kind, root_id) in entries {
@@ -1610,7 +1757,13 @@ fn set_theme_mode(connection: &mut Connection, mode: &str) -> Result<DbResponse,
     if !["light", "dark", "system"].contains(&mode) {
         return Err(ApiError::new("INVALID_STATUS_TRANSITION", "主题模式无效"));
     }
-    connection.execute("INSERT INTO app_settings(key,value) VALUES('theme_mode',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![mode]).map_err(db_error)?;
+    let tx = begin_immediate(connection)?;
+    tx.execute(
+        "INSERT INTO app_settings(key,value) VALUES('theme_mode',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![mode],
+    )
+    .map_err(db_error)?;
+    tx.commit().map_err(db_error)?;
     Ok(DbResponse::Theme(ThemeSettings {
         theme_mode: mode.to_string(),
     }))
@@ -1968,6 +2121,233 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn tree_order_handles_deep_trees_and_cycles_iteratively() {
+        let depth = 10_000usize;
+        let mut records = Vec::with_capacity(depth + 2);
+        for index in 0..depth {
+            records.push(ProjectRecord {
+                id: format!("node-{index}"),
+                parent_id: if index == 0 {
+                    None
+                } else {
+                    Some(format!("node-{}", index - 1))
+                },
+                title: format!("Node {index}"),
+                status: "active".into(),
+                completed_date: None,
+                canceled_date: None,
+                sort_order: 1024,
+                version: 0,
+                is_expanded: true,
+                deleted_at: None,
+                trash_entry_id: None,
+            });
+        }
+        records.push(ProjectRecord {
+            id: "cycle-a".into(),
+            parent_id: Some("cycle-b".into()),
+            title: "Cycle A".into(),
+            status: "active".into(),
+            completed_date: None,
+            canceled_date: None,
+            sort_order: 1024,
+            version: 0,
+            is_expanded: true,
+            deleted_at: None,
+            trash_entry_id: None,
+        });
+        records.push(ProjectRecord {
+            id: "cycle-b".into(),
+            parent_id: Some("cycle-a".into()),
+            title: "Cycle B".into(),
+            status: "active".into(),
+            completed_date: None,
+            canceled_date: None,
+            sort_order: 1024,
+            version: 0,
+            is_expanded: true,
+            deleted_at: None,
+            trash_entry_id: None,
+        });
+        let ordered = tree_order(&records);
+        assert_eq!(ordered.len(), depth + 2);
+        assert_eq!(ordered[0].id, "node-0");
+        assert_eq!(ordered[depth - 1].id, format!("node-{}", depth - 1));
+    }
+
+    #[test]
+    fn db_handle_shutdown_drains_queued_writes_and_rejects_after_close() {
+        let path =
+            std::env::temp_dir().join(format!("branchtrace-shutdown-{}.sqlite3", Uuid::new_v4()));
+        let handle = DbHandle::start(path.clone()).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let created_id = runtime.block_on(async {
+            match handle
+                .request(DbOp::CreateProject {
+                    title: "关闭前写入".into(),
+                    parent_id: None,
+                })
+                .await
+                .unwrap()
+            {
+                DbResponse::Project(project) => project.id,
+                _ => panic!("unexpected create response"),
+            }
+        });
+        handle.shutdown();
+        handle.shutdown();
+
+        let after_close = runtime.block_on(handle.request(DbOp::GetProjectTree));
+        assert!(after_close.is_err());
+
+        let connection = initialize_connection(&path).unwrap();
+        assert!(project_record_by_id(&connection, &created_id, false)
+            .unwrap()
+            .is_some());
+        drop(connection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn db_handle_start_returns_migration_error_for_unsupported_schema_version() {
+        let path =
+            std::env::temp_dir().join(format!("branchtrace-future-{}.sqlite3", Uuid::new_v4()));
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("PRAGMA user_version = 99;")
+                .unwrap();
+        }
+        let error = match DbHandle::start(path.clone()) {
+            Ok(_) => panic!("expected migration error"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "MIGRATION_ERROR");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn nested_trash_batches_preserve_child_batch_on_parent_restore_and_clean_on_hard_delete() {
+        let mut connection = test_connection();
+        let parent_id = expansion_test_project(&mut connection, "父项目", None);
+        let child_id = expansion_test_project(&mut connection, "子项目", Some(&parent_id));
+
+        let child_entry = match trash_project(&mut connection, &child_id).unwrap() {
+            DbResponse::TrashEntry(entry) => entry,
+            _ => panic!("unexpected child trash response"),
+        };
+        assert_eq!(child_entry.affected_count_at_delete, 1);
+
+        match preview_project_trash(&connection, &parent_id).unwrap() {
+            DbResponse::Preview { active_node_count } => assert_eq!(active_node_count, 1),
+            _ => panic!("unexpected preview response"),
+        }
+
+        let parent_entry = match trash_project(&mut connection, &parent_id).unwrap() {
+            DbResponse::TrashEntry(entry) => entry,
+            _ => panic!("unexpected parent trash response"),
+        };
+        assert_eq!(parent_entry.affected_count_at_delete, 1);
+        assert_eq!(parent_entry.current_descendant_count, Some(2));
+
+        let child_restore_err = restore_trash_entry(&mut connection, &child_entry.id).unwrap_err();
+        assert_eq!(child_restore_err.code, "PARENT_IN_TRASH");
+
+        match restore_trash_entry(&mut connection, &parent_entry.id).unwrap() {
+            DbResponse::RestoreTrash { restored_count, .. } => assert_eq!(restored_count, 1),
+            _ => panic!("unexpected parent restore response"),
+        }
+        match get_project_tree(&connection).unwrap() {
+            DbResponse::Projects(projects) => {
+                assert_eq!(projects.len(), 1);
+                assert_eq!(projects[0].id, parent_id);
+            }
+            _ => panic!("unexpected tree response"),
+        }
+
+        let parent_entry_2 = match trash_project(&mut connection, &parent_id).unwrap() {
+            DbResponse::TrashEntry(entry) => entry,
+            _ => panic!("unexpected second parent trash response"),
+        };
+        match permanently_delete_trash_entry(&mut connection, &parent_entry_2.id).unwrap() {
+            DbResponse::DeleteTrash {
+                deleted_project_count,
+                ..
+            } => assert_eq!(deleted_project_count, 2),
+            _ => panic!("unexpected hard delete response"),
+        }
+        match list_trash(&connection, "project").unwrap() {
+            DbResponse::TrashEntries(entries) => assert!(entries.is_empty()),
+            _ => panic!("unexpected trash list response"),
+        }
+        let fk_violations: i64 = connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(1))
+            .unwrap()
+            .count() as i64;
+        assert_eq!(fk_violations, 0);
+    }
+
+    #[test]
+    fn version_conflict_blocks_stale_undo_after_newer_edit() {
+        let mut connection = test_connection();
+        let project_id = expansion_test_project(&mut connection, "可撤销项目", None);
+        let completed_version =
+            match set_project_terminal(&mut connection, &project_id, 0, "completed").unwrap() {
+                DbResponse::Project(project) => project.version,
+                _ => panic!("unexpected complete response"),
+            };
+        rename_project(
+            &mut connection,
+            &project_id,
+            "改名后项目",
+            completed_version,
+        )
+        .unwrap();
+        let error = restore_project(&mut connection, &project_id, completed_version).unwrap_err();
+        assert_eq!(error.code, "VERSION_CONFLICT");
+    }
+
+    #[test]
+    fn update_reminder_completed_date_preserves_completed_action_at() {
+        let mut connection = test_connection();
+        let today = local_today();
+        let today_str = date_string(today);
+        let yesterday_str = date_string(today - Duration::days(1));
+        let reminder = match create_reminder(&mut connection, "提醒事项", &today_str).unwrap() {
+            DbResponse::Reminder(item) => item,
+            _ => panic!("unexpected create reminder response"),
+        };
+        let completed =
+            match complete_reminder(&mut connection, &reminder.id, reminder.version).unwrap() {
+                DbResponse::Reminder(item) => item,
+                _ => panic!("unexpected complete reminder response"),
+            };
+        let original_action_at = completed.completed_action_at.clone();
+        assert!(original_action_at.is_some());
+
+        let updated = match update_reminder_completed_date(
+            &mut connection,
+            &completed.id,
+            &yesterday_str,
+            completed.version,
+        )
+        .unwrap()
+        {
+            DbResponse::Reminder(item) => item,
+            _ => panic!("unexpected update completed date response"),
+        };
+        assert_eq!(
+            updated.completed_date.as_deref(),
+            Some(yesterday_str.as_str())
+        );
+        assert_eq!(updated.completed_action_at, original_action_at);
     }
 
     fn test_connection() -> Connection {

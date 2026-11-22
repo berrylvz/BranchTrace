@@ -10,10 +10,20 @@ use models::{
 };
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::{Manager, WindowEvent};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 pub struct AppState {
-    pub db: DbHandle,
+    pub db: Result<DbHandle, ApiError>,
+    closing: AtomicBool,
+}
+
+impl AppState {
+    pub fn shutdown(&self) {
+        if let Ok(db) = &self.db {
+            db.shutdown();
+        }
+    }
 }
 
 fn unexpected_response() -> ApiError {
@@ -21,7 +31,8 @@ fn unexpected_response() -> ApiError {
 }
 
 async fn request(state: &tauri::State<'_, AppState>, op: DbOp) -> Result<DbResponse, ApiError> {
-    state.db.request(op).await
+    let db = state.db.as_ref().map_err(Clone::clone)?;
+    db.request(op).await
 }
 
 #[tauri::command]
@@ -595,29 +606,64 @@ async fn set_theme_mode(
     }
 }
 
+fn startup_error(mut error: ApiError, db_path: Option<&PathBuf>) -> ApiError {
+    let mut details = serde_json::Map::new();
+    details.insert("startupError".to_string(), serde_json::Value::Bool(true));
+    if let Some(path) = db_path {
+        details.insert(
+            "dbPath".to_string(),
+            serde_json::Value::String(path.display().to_string()),
+        );
+    }
+    error.details = Some(serde_json::Value::Object(details));
+    error
+}
+
+fn initialize_db(app: &tauri::App) -> Result<DbHandle, ApiError> {
+    let data_dir: PathBuf = app.path().app_data_dir().map_err(|error| {
+        startup_error(
+            ApiError::new("MIGRATION_ERROR", format!("无法取得应用数据目录: {error}")),
+            None,
+        )
+    })?;
+    let db_path = data_dir.join("branchtrace.sqlite3");
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        return Err(startup_error(
+            ApiError::new("MIGRATION_ERROR", format!("无法创建应用数据目录: {error}")),
+            Some(&db_path),
+        ));
+    }
+    DbHandle::start(db_path.clone()).map_err(|error| startup_error(error, Some(&db_path)))
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
-            let data_dir: PathBuf = app.path().app_data_dir().map_err(|error| {
-                Box::new(std::io::Error::other(format!(
-                    "无法取得应用数据目录: {error}"
-                ))) as Box<dyn std::error::Error>
-            })?;
-            std::fs::create_dir_all(&data_dir).map_err(|error| {
-                Box::new(std::io::Error::other(format!(
-                    "无法创建应用数据目录: {error}"
-                ))) as Box<dyn std::error::Error>
-            })?;
-            let db_path = data_dir.join("branchtrace.sqlite3");
-            let db = DbHandle::start(db_path).map_err(|error| {
-                Box::new(std::io::Error::other(error.message)) as Box<dyn std::error::Error>
-            })?;
-            app.manage(AppState { db });
+            let db = initialize_db(app);
+            app.manage(AppState {
+                db,
+                closing: AtomicBool::new(false),
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(event, WindowEvent::CloseRequested { .. }) {
-                window.app_handle().exit(0);
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app_handle = window.app_handle().clone();
+                let should_shutdown = app_handle
+                    .try_state::<AppState>()
+                    .map(|state| !state.closing.swap(true, Ordering::SeqCst))
+                    .unwrap_or(true);
+                if !should_shutdown {
+                    return;
+                }
+                let _ = window.hide();
+                std::thread::spawn(move || {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        state.shutdown();
+                    }
+                    app_handle.exit(0);
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -656,6 +702,14 @@ pub fn run() {
             get_app_settings,
             set_theme_mode
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("枝迹启动失败");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.shutdown();
+            }
+        }
+    });
 }

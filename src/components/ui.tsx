@@ -1,14 +1,52 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Component, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
-export type ActionResult = { ok: true } | { ok: false; message: string }
-export type ActionRunner = (action: () => Promise<unknown>, success?: string) => Promise<ActionResult>
+export interface NoticeAction {
+  label: string
+  onClick: () => void
+}
+
+export interface NoticeConfig {
+  message: string
+  error?: boolean
+  durationMs?: number
+  action?: NoticeAction
+}
+
+export type ActionResult<T = unknown> = { ok: true; data: T } | { ok: false; message: string }
+export type ActionRunner = <T = unknown>(
+  action: () => Promise<T>,
+  success?: string | ((data: T) => NoticeConfig | string | null),
+) => Promise<ActionResult<T>>
 
 export function errorMessage(error: unknown) {
   return typeof error === 'object' && error !== null && 'message' in error
     ? String(error.message)
     : String(error)
+}
+
+export class AppErrorBoundary extends Component<{ children: ReactNode }, { error: unknown | null }> {
+  state: { error: unknown | null } = { error: null }
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error !== null) {
+      return <div className="fatal-shell" role="alert">
+        <section className="fatal-card card">
+          <div className="brand-block"><span className="brand-mark" aria-hidden="true">枝</span><span className="brand-name">枝迹</span></div>
+          <h1>界面遇到意外错误</h1>
+          <p className="fatal-message">{errorMessage(this.state.error)}</p>
+          <p className="muted">本地数据库文件不会受到此次渲染异常的影响。</p>
+          <div className="dialog-actions"><button type="button" className="primary-button" onClick={() => window.location.reload()}>重新加载界面</button></div>
+        </section>
+      </div>
+    }
+    return this.props.children
+  }
 }
 
 interface MenuItem {

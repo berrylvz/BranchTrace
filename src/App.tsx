@@ -1,16 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
-import { ActionMenu, ConfirmDialog, errorMessage, FormDialog, LoadError, Modal } from './components/ui'
-import type { ActionRunner } from './components/ui'
+import { ActionMenu, AppErrorBoundary, ConfirmDialog, errorMessage, FormDialog, LoadError, Modal } from './components/ui'
+import type { ActionRunner, NoticeConfig } from './components/ui'
 import { createMoveOptions } from './project-options'
 import { createProjectTree, MAX_TREE_INDENT, TREE_INDENT } from './project-tree'
 import type { ProjectTreeRow } from './project-tree'
-import type { DailyDayDto, DailyWeekDto, ProjectDailyItem, ProjectDetailDto, ProjectDto, ReminderDailyItem, ThemeMode, TrashEntryDto } from './types'
+import type { ApiError, DailyDayDto, DailyWeekDto, ProjectDailyItem, ProjectDetailDto, ProjectDto, ReminderDailyItem, ThemeMode, TrashEntryDto } from './types'
 import './index.css'
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: 1 } } })
+function isStartupError(error: unknown): error is ApiError {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false
+  const apiError = error as ApiError
+  return apiError.code === 'MIGRATION_ERROR' || apiError.details?.startupError === true
+}
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 15_000,
+      retry: (failureCount, error) => !isStartupError(error) && failureCount < 1,
+    },
+  },
+})
 const statusText = { active: '进行中', completed: '已完成', canceled: '已取消' } as const
 type View = 'project' | 'daily' | 'trash' | 'settings'
 
@@ -21,9 +35,10 @@ function AppShell() {
   const [trashKind, setTrashKind] = useState<'project' | 'reminder'>('project')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [calendarProjectId, setCalendarProjectId] = useState<string | null>(null)
-  const [notice, setNotice] = useState<{ message: string; error?: boolean } | null>(null)
+  const [notice, setNotice] = useState<NoticeConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const actionLock = useRef(false)
+  const previousClock = useRef<{ today: string; weekStart: string } | null>(null)
 
   const clock = useQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, refetchInterval: 60_000 })
   const projects = useQuery({ queryKey: ['projectTree'], queryFn: api.getProjectTree })
@@ -33,12 +48,39 @@ function AppShell() {
   const detail = useQuery({ queryKey: ['projectDetail', selectedProjectId], queryFn: () => api.getProjectDetail(selectedProjectId!), enabled: Boolean(selectedProjectId) })
 
   useEffect(() => {
-    if (clock.data && !weekStart) setWeekStart(clock.data.weekStart)
-  }, [clock.data, weekStart])
+    const current = clock.data
+    if (!current) return
+    const previous = previousClock.current
+    previousClock.current = { today: current.today, weekStart: current.weekStart }
+    if (!previous) {
+      setWeekStart((currentWeek) => currentWeek ?? current.weekStart)
+      return
+    }
+    if (previous.today !== current.today || previous.weekStart !== current.weekStart) {
+      setWeekStart((currentWeek) => (!currentWeek || currentWeek === previous.weekStart ? current.weekStart : currentWeek))
+      void Promise.all(
+        ['projectTree', 'dailyWeek', 'projectDetail', 'projectProgressMonth']
+          .map((key) => client.invalidateQueries({ queryKey: [key] })),
+      )
+    }
+  }, [clock.data, client])
+
+  useEffect(() => {
+    const syncClock = () => {
+      if (document.visibilityState === 'hidden') return
+      void client.invalidateQueries({ queryKey: ['clockContext'] })
+    }
+    window.addEventListener('focus', syncClock)
+    document.addEventListener('visibilitychange', syncClock)
+    return () => {
+      window.removeEventListener('focus', syncClock)
+      document.removeEventListener('visibilitychange', syncClock)
+    }
+  }, [client])
 
   useEffect(() => {
     if (!notice || notice.error) return
-    const timeout = window.setTimeout(() => setNotice(null), 3500)
+    const timeout = window.setTimeout(() => setNotice(null), notice.durationMs ?? 3500)
     return () => window.clearTimeout(timeout)
   }, [notice])
 
@@ -52,7 +94,10 @@ function AppShell() {
     return () => media.removeEventListener('change', apply)
   }, [settings.data?.themeMode])
 
-  const refresh = () => Promise.all(['projectTree', 'projectDetail', 'projectProgressMonth', 'dailyWeek', 'reminder', 'trash', 'settings', 'clockContext'].map((key) => client.invalidateQueries({ queryKey: [key] })))
+  const refresh = () => Promise.all(
+    ['projectTree', 'projectDetail', 'projectProgressMonth', 'dailyWeek', 'reminder', 'trash', 'settings', 'clockContext']
+      .map((key) => client.invalidateQueries({ queryKey: [key] }, { throwOnError: true })),
+  )
 
   const perform: ActionRunner = async (action, success) => {
     if (actionLock.current) return { ok: false, message: '操作正在进行，请稍候。' }
@@ -60,8 +105,9 @@ function AppShell() {
     setBusy(true)
     setNotice(null)
     try {
+      let data: Awaited<ReturnType<typeof action>>
       try {
-        await action()
+        data = await action()
       } catch (error) {
         const message = errorMessage(error)
         setNotice({ message, error: true })
@@ -71,16 +117,41 @@ function AppShell() {
       }
       try {
         await refresh()
-        if (success) setNotice({ message: success })
+        if (success) {
+          const resolved = typeof success === 'function' ? success(data) : success
+          if (typeof resolved === 'string') setNotice({ message: resolved })
+          else if (resolved) setNotice(resolved)
+        }
       } catch {
         // The write committed; keep a refresh failure from causing a duplicate write.
         setNotice({ message: '已保存，页面刷新失败，请重新打开此页面。', error: true })
       }
-      return { ok: true }
+      return { ok: true, data }
     } finally {
       actionLock.current = false
       setBusy(false)
     }
+  }
+
+  const openDailyView = () => {
+    setView('daily')
+    void client
+      .fetchQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, staleTime: 0 })
+      .then((fresh) => {
+        setWeekStart(fresh.weekStart)
+        return Promise.all([
+          client.invalidateQueries({ queryKey: ['dailyWeek'] }),
+          client.invalidateQueries({ queryKey: ['projectTree'] }),
+        ])
+      })
+      .catch(() => {
+        if (clock.data) setWeekStart(clock.data.weekStart)
+      })
+  }
+
+  const startupError = ([projects.error, settings.error, daily.error, trash.error] as unknown[]).find(isStartupError)
+  if (startupError) {
+    return <StartupErrorView error={startupError} />
   }
 
   const projectList = projects.data ?? []
@@ -92,12 +163,16 @@ function AppShell() {
       <div className="brand-block"><span className="brand-mark" aria-hidden="true">枝</span><span className="brand-name">枝迹</span></div>
       <nav className="main-nav" aria-label="主视图">
         <button type="button" data-focus-fallback className={`nav-item ${view === 'project' ? 'active' : ''}`} aria-current={view === 'project' ? 'page' : undefined} disabled={busy} onClick={() => setView('project')}>项目</button>
-        <button type="button" className={`nav-item ${view === 'daily' ? 'active' : ''}`} aria-current={view === 'daily' ? 'page' : undefined} disabled={busy} onClick={() => { setView('daily'); if (clock.data) setWeekStart(clock.data.weekStart) }}>每日</button>
+        <button type="button" className={`nav-item ${view === 'daily' ? 'active' : ''}`} aria-current={view === 'daily' ? 'page' : undefined} disabled={busy} onClick={openDailyView}>每日</button>
       </nav>
       <div className="top-actions"><time className="today-text" dateTime={today} title={`今天 ${today}`}>{today}</time><ActionMenu label="全局更多" active={view === 'trash' || view === 'settings'} disabled={busy} items={[{ label: '回收站', onSelect: () => setView('trash') }, { label: '设置', onSelect: () => setView('settings') }]} /></div>
     </header>
 
-    {notice && <div className={`notice ${notice.error ? 'notice-error' : ''}`} role={notice.error ? 'alert' : 'status'}><span>{notice.message}</span><button type="button" className="icon-button" onClick={() => setNotice(null)} aria-label="关闭提示">×</button></div>}
+    {notice && createPortal(<div className={`notice ${notice.error ? 'notice-error' : ''}`} role={notice.error ? 'alert' : 'status'}>
+      <span>{notice.message}</span>
+      {notice.action && <button type="button" className="text-button notice-action" disabled={busy} onClick={() => { const handler = notice.action!.onClick; setNotice(null); handler() }}>{notice.action.label}</button>}
+      <button type="button" className="icon-button" onClick={() => setNotice(null)} aria-label="关闭提示">×</button>
+    </div>, document.body)}
 
     <main className="main-content">
       {view === 'project' && <>
@@ -126,6 +201,7 @@ function AppShell() {
 
 function ProjectView({ projects, loading, busy, today, onAction, onOpenDetail, onOpenCalendar }: { projects: ProjectDto[]; loading: boolean; busy: boolean; today: string; onAction: ActionRunner; onOpenDetail: (id: string) => void; onOpenCalendar: (id: string) => void }) {
   const [newTitle, setNewTitle] = useState('')
+  const createInputRef = useRef<HTMLInputElement>(null)
   const { grouped, rows, hasBranches } = useMemo(() => createProjectTree(projects), [projects])
   const treeMinWidth = 320 + rows.reduce((width, row) => Math.max(width, Math.min(row.depth, MAX_TREE_INDENT) * TREE_INDENT + (row.depth > MAX_TREE_INDENT ? 72 : 0)), 0)
 
@@ -141,9 +217,12 @@ function ProjectView({ projects, loading, busy, today, onAction, onOpenDetail, o
   }
 
   const createRoot = async () => {
-    if (busy || !newTitle.trim()) return
+    if (busy || loading || !newTitle.trim()) return
     const result = await onAction(() => api.createProject(newTitle.trim()), '项目已创建')
-    if (result.ok) setNewTitle('')
+    if (result.ok) {
+      setNewTitle('')
+      createInputRef.current?.focus({ preventScroll: true })
+    }
   }
 
   return <section className="view-stack" aria-label="项目">
@@ -155,7 +234,7 @@ function ProjectView({ projects, loading, busy, today, onAction, onOpenDetail, o
         </div>
       </div>
       <form className="create-bar" onSubmit={(event) => { event.preventDefault(); void createRoot() }}>
-        <input value={newTitle} disabled={busy || loading} onChange={(event) => setNewTitle(event.target.value)} placeholder="新建项目…" aria-label="新建顶层项目" />
+        <input ref={createInputRef} value={newTitle} readOnly={busy || loading} aria-busy={busy || loading} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setNewTitle('') }} placeholder="新建项目…" aria-label="新建顶层项目" />
         <button type="submit" className="primary-button" disabled={busy || loading || !newTitle.trim()}>添加</button>
       </form>
     </div>
@@ -187,7 +266,36 @@ function ProjectRow({ row, projects, busy, today, onAction, onOpenDetail, onOpen
 
   const menuItems = [
     ...(project.status === 'active'
-      ? [{ label: '标记完成', onSelect: () => void onAction(() => api.completeProject(project.id, project.version), '项目已完成') }, { label: '取消项目', onSelect: () => void onAction(() => api.cancelProject(project.id, project.version), '项目已取消') }]
+      ? [
+        {
+          label: '标记完成',
+          onSelect: () => void onAction(
+            () => api.completeProject(project.id, project.version),
+            (updated) => ({
+              message: '项目已完成',
+              durationMs: 5000,
+              action: {
+                label: '撤销',
+                onClick: () => void onAction(() => api.restoreProject(updated.id, updated.version), '已撤销完成'),
+              },
+            }),
+          ),
+        },
+        {
+          label: '取消项目',
+          onSelect: () => void onAction(
+            () => api.cancelProject(project.id, project.version),
+            (updated) => ({
+              message: '项目已取消',
+              durationMs: 5000,
+              action: {
+                label: '撤销',
+                onClick: () => void onAction(() => api.restoreProject(updated.id, updated.version), '已撤销取消'),
+              },
+            }),
+          ),
+        },
+      ]
       : [{ label: '恢复未完成', onSelect: () => void onAction(() => api.restoreProject(project.id, project.version), '项目已恢复') }, { label: '修改终止日期', onSelect: () => setDialog('terminal') }]),
     { label: '新建子项目', separator: true, onSelect: () => setDialog('child') },
     { label: '重命名', onSelect: () => setDialog('rename') },
@@ -261,12 +369,16 @@ function DailyView({ daily, weekStart, currentWeekStart, onWeekChange, busy, onA
 
 function DailyColumn({ day, today, busy, onAction, onOpenDetail }: { day: DailyDayDto; today: string; busy: boolean; onAction: ActionRunner; onOpenDetail: (id: string) => void }) {
   const [newReminder, setNewReminder] = useState('')
+  const reminderInputRef = useRef<HTMLInputElement>(null)
   const plannedReminders = [...day.plannedReminders].sort((a, b) => a.reminder.sortOrder - b.reminder.sortOrder || a.reminder.id.localeCompare(b.reminder.id))
   const canAdd = day.date >= today
   const addReminder = async () => {
     if (busy || !newReminder.trim()) return
     const result = await onAction(() => api.createReminder(newReminder.trim(), day.date), '提醒已创建')
-    if (result.ok) setNewReminder('')
+    if (result.ok) {
+      setNewReminder('')
+      reminderInputRef.current?.focus({ preventScroll: true })
+    }
   }
   const reorderReminders = async (fromId: string, toId: string) => {
     if (busy) return
@@ -291,7 +403,7 @@ function DailyColumn({ day, today, busy, onAction, onOpenDetail }: { day: DailyD
         {day.overdueReminders.map((item) => <ReminderRow key={`overdue-${item.reminder.id}`} item={item} today={today} busy={busy} onAction={onAction} overdue />)}
         {day.crossDayCompletedReminders.length > 0 && <div className="subgroup-label">跨日完成</div>}
         {day.crossDayCompletedReminders.map((item) => <ReminderRow key={`completed-${item.reminder.id}`} item={item} today={today} busy={busy} onAction={onAction} />)}
-        {canAdd && <form className="reminder-create" onSubmit={(event) => { event.preventDefault(); void addReminder() }}><input value={newReminder} disabled={busy} onChange={(event) => setNewReminder(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setNewReminder('') }} placeholder="添加提醒…" aria-label={`${day.date} 新建提醒`} /><button type="submit" className="icon-button" aria-label={`${day.date} 添加提醒`} disabled={busy || !newReminder.trim()}>＋</button></form>}
+        {canAdd && <form className="reminder-create" onSubmit={(event) => { event.preventDefault(); void addReminder() }}><input ref={reminderInputRef} value={newReminder} readOnly={busy} aria-busy={busy} onChange={(event) => setNewReminder(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setNewReminder('') }} placeholder="添加提醒…" aria-label={`${day.date} 新建提醒`} /><button type="submit" className="icon-button" aria-label={`${day.date} 添加提醒`} disabled={busy || !newReminder.trim()}>＋</button></form>}
       </DayGroup>}
       {!day.completedProjects.length && !day.progressedProjects.length && !hasReminders && !canAdd && <div className="day-empty">暂无记录</div>}
     </div>
@@ -303,7 +415,14 @@ function DayGroup({ title, tone, children }: { title: string; tone: string; chil
 }
 
 function ProjectDailyRow({ item, onOpenDetail, completed = false }: { item: ProjectDailyItem; onOpenDetail: (id: string) => void; completed?: boolean }) {
-  return <button type="button" className="daily-item" onClick={() => onOpenDetail(item.projectId)} title={[...item.parentPath, item.title].join(' / ')}><span className="item-icon" aria-hidden="true">{completed ? '✓' : '↗'}</span><span className="item-text"><strong>{item.title}</strong>{(item.parentPath.length > 0 || item.shortId) && <small>{[item.parentPath.join(' / '), item.shortId].filter(Boolean).join(' · ')}</small>}</span></button>
+  const meta = [item.parentPath.join(' / '), item.shortId].filter(Boolean).join(' · ')
+  return <button type="button" className="daily-item" onClick={() => onOpenDetail(item.projectId)} title={[...item.parentPath, item.title].join(' / ')}>
+    <span className="item-icon" aria-hidden="true">{completed ? '✓' : '↗'}</span>
+    <span className="item-text">
+      <span className="item-heading"><strong>{item.title}</strong>{completed && item.progressedSameDay && <span className="same-day-badge">当天也推进过</span>}</span>
+      {meta && <small>{meta}</small>}
+    </span>
+  </button>
 }
 
 type ReminderDialog = 'rename' | 'schedule' | 'completedDate' | 'trash'
@@ -406,9 +525,23 @@ function ProjectDetailModal({ detail, loading, error, retry, onClose }: { detail
   </Modal>
 }
 
+function StartupErrorView({ error }: { error: ApiError }) {
+  const dbPath = typeof error.details?.dbPath === 'string' ? error.details.dbPath : null
+  return <div className="fatal-shell" role="alert">
+    <section className="fatal-card card">
+      <div className="brand-block"><span className="brand-mark" aria-hidden="true">枝</span><span className="brand-name">枝迹</span></div>
+      <h1>数据库初始化失败</h1>
+      <p className="fatal-message">{error.message}</p>
+      <p className="muted">错误码：{error.code}</p>
+      {dbPath && <p className="fatal-path">数据库路径：<code>{dbPath}</code></p>}
+      <p className="muted">为保护您的数据，应用不会覆盖或删除现有数据库文件。请先备份该文件并排查问题后重启应用。</p>
+    </section>
+  </div>
+}
+
 function EmptyState({ children }: { children: ReactNode }) { return <div className="empty-state">{children}</div> }
 function formatWeekday(value: string) { return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dateFrom(value).getDay()] }
 function dateFrom(value: string) { return new Date(`${value}T12:00:00`) }
 function isoDate(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 
-export default function App() { return <QueryClientProvider client={queryClient}><AppShell /></QueryClientProvider> }
+export default function App() { return <AppErrorBoundary><QueryClientProvider client={queryClient}><AppShell /></QueryClientProvider></AppErrorBoundary> }
