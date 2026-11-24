@@ -29,8 +29,8 @@ Linux 构建需要 Tauri 2 的系统依赖，包括 WebKitGTK、GTK 3 和 librsv
 
 ## 后端结构
 
-- `src-tauri/src/models.rs`：DTO、错误、数据库操作消息。
-- `src-tauri/src/db.rs`：唯一 SQLite 连接的数据库工作线程、迁移、事务和业务操作。
+- `src-tauri/src/models.rs`：DTO、错误码与领域枚举。
+- `src-tauri/src/db/`：唯一 SQLite 连接的数据库工作线程、迁移、事务和各领域业务操作（含 `tests.rs`）。
 - `src-tauri/src/lib.rs`：Tauri Commands、应用数据目录和生命周期。
 - `src-tauri/migrations/001_initial.sql`：SQLite v1 初始化迁移。
 

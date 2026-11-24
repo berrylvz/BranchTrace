@@ -1,11 +1,6 @@
 -- BranchTrace (枝迹) MVP / SQLite Schema / migration v1
 -- Apply via rusqlite migration runner to a new database only.
--- Suggested local database filename: branchtrace.sqlite3 (not an SQL schema property).
--- Connection PRAGMAs (set once per connection, before the transaction):
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = FULL;
-PRAGMA busy_timeout = 5000;
+-- Connection PRAGMAs are configured by schema::configure_and_migrate before running migrations.
 
 BEGIN IMMEDIATE;
 

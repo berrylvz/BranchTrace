@@ -1,21 +1,52 @@
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
-use tokio::sync::oneshot;
+use std::fmt;
+
+#[derive(Debug)]
+struct InvalidEnumValue(String);
+
+impl fmt::Display for InvalidEnumValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InvalidEnumValue {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ErrorCode {
+    NotFound,
+    InvalidTitle,
+    InvalidDate,
+    InvalidInput,
+    FutureDateForbidden,
+    ScheduleInPast,
+    TerminalDateBeforeProgress,
+    InvalidStatusTransition,
+    VersionConflict,
+    InvalidParent,
+    ReorderMembershipMismatch,
+    ParentInTrash,
+    DbBusy,
+    DbError,
+    MigrationError,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
-    pub code: String,
+    pub code: ErrorCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
 }
 
 impl ApiError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: None,
         }
@@ -25,9 +56,147 @@ impl ApiError {
         self.details = Some(details);
         self
     }
+}
 
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::new("DB_ERROR", message)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemStatus {
+    Active,
+    Completed,
+    Canceled,
+}
+
+impl ItemStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Completed => "completed",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
+impl ToSql for ItemStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for ItemStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "active" => Ok(Self::Active),
+            "completed" => Ok(Self::Completed),
+            "canceled" => Ok(Self::Canceled),
+            other => Err(FromSqlError::Other(Box::new(InvalidEnumValue(format!(
+                "Invalid status value in database: {other}"
+            ))))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalStatus {
+    Completed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReminderDisplayType {
+    Planned,
+    Completed,
+    Overdue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrashKind {
+    Project,
+    Reminder,
+}
+
+impl TrashKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Reminder => "reminder",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, ApiError> {
+        match value {
+            "project" => Ok(Self::Project),
+            "reminder" => Ok(Self::Reminder),
+            _ => Err(ApiError::new(
+                ErrorCode::InvalidInput,
+                "Invalid trash category",
+            )),
+        }
+    }
+}
+
+impl ToSql for TrashKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for TrashKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "project" => Ok(Self::Project),
+            "reminder" => Ok(Self::Reminder),
+            other => Err(FromSqlError::Other(Box::new(InvalidEnumValue(format!(
+                "Invalid trash kind in database: {other}"
+            ))))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+    System,
+}
+
+impl ThemeMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, ApiError> {
+        match value {
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            "system" => Ok(Self::System),
+            _ => Err(ApiError::new(ErrorCode::InvalidInput, "Invalid theme mode")),
+        }
+    }
+}
+
+impl ToSql for ThemeMode {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for ThemeMode {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            "system" => Ok(Self::System),
+            other => Err(FromSqlError::Other(Box::new(InvalidEnumValue(format!(
+                "Invalid theme mode in database: {other}"
+            ))))),
+        }
     }
 }
 
@@ -45,7 +214,7 @@ pub struct ProjectDto {
     pub id: String,
     pub parent_id: Option<String>,
     pub title: String,
-    pub status: String,
+    pub status: ItemStatus,
     pub completed_date: Option<String>,
     pub canceled_date: Option<String>,
     pub sort_order: i64,
@@ -71,7 +240,7 @@ pub struct ReminderDto {
     pub id: String,
     pub title: String,
     pub scheduled_date: String,
-    pub status: String,
+    pub status: ItemStatus,
     pub completed_date: Option<String>,
     pub completed_action_at: Option<String>,
     pub canceled_date: Option<String>,
@@ -86,7 +255,7 @@ pub struct ProjectDailyItem {
     pub title: String,
     pub parent_path: Vec<String>,
     pub short_id: Option<String>,
-    pub status: String,
+    pub status: ItemStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progressed_same_day: Option<bool>,
 }
@@ -95,7 +264,7 @@ pub struct ProjectDailyItem {
 #[serde(rename_all = "camelCase")]
 pub struct ReminderDailyItem {
     pub reminder: ReminderDto,
-    pub display_type: String,
+    pub display_type: ReminderDisplayType,
     pub is_planned_and_completed_same_day: bool,
 }
 
@@ -144,7 +313,7 @@ pub struct MonthCalendarDto {
 #[serde(rename_all = "camelCase")]
 pub struct TrashEntryDto {
     pub id: String,
-    pub kind: String,
+    pub kind: TrashKind,
     pub root_entity_id: String,
     pub title_snapshot: String,
     pub deleted_at: String,
@@ -154,8 +323,28 @@ pub struct TrashEntryDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PreviewResult {
+    pub active_node_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    pub kind: TrashKind,
+    pub restored_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    pub deleted_project_count: i64,
+    pub deleted_reminder_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThemeSettings {
-    pub theme_mode: String,
+    pub theme_mode: ThemeMode,
 }
 
 #[derive(Debug, Clone)]
@@ -163,14 +352,12 @@ pub struct ProjectRecord {
     pub id: String,
     pub parent_id: Option<String>,
     pub title: String,
-    pub status: String,
+    pub status: ItemStatus,
     pub completed_date: Option<String>,
     pub canceled_date: Option<String>,
     pub sort_order: i64,
     pub version: i64,
     pub is_expanded: bool,
-    pub deleted_at: Option<String>,
-    pub trash_entry_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,176 +365,10 @@ pub struct ReminderRecord {
     pub id: String,
     pub title: String,
     pub scheduled_date: String,
-    pub status: String,
+    pub status: ItemStatus,
     pub completed_date: Option<String>,
     pub completed_action_at: Option<String>,
     pub canceled_date: Option<String>,
     pub sort_order: i64,
     pub version: i64,
-    pub deleted_at: Option<String>,
-    pub trash_entry_id: Option<String>,
 }
-
-#[derive(Debug)]
-pub struct DbRequest {
-    pub op: DbOp,
-    pub reply: oneshot::Sender<Result<DbResponse, ApiError>>,
-}
-
-#[derive(Debug)]
-pub enum DbResponse {
-    Unit,
-    Project(ProjectDto),
-    Projects(Vec<ProjectDto>),
-    ProjectDetail(ProjectDetailDto),
-    Dates(Vec<String>),
-    Reminder(ReminderDto),
-    Reminders(Vec<ReminderDto>),
-    Daily(DailyWeekDto),
-    MonthCalendar(MonthCalendarDto),
-    Preview {
-        active_node_count: i64,
-    },
-    TrashEntry(TrashEntryDto),
-    TrashEntries(Vec<TrashEntryDto>),
-    RestoreTrash {
-        kind: String,
-        restored_count: i64,
-    },
-    DeleteTrash {
-        deleted_project_count: i64,
-        deleted_reminder_count: i64,
-    },
-    Theme(ThemeSettings),
-}
-
-#[derive(Debug)]
-pub enum DbOp {
-    GetProjectTree,
-    GetProjectDetail {
-        project_id: String,
-    },
-    GetProjectProgressMonth {
-        project_id: String,
-        month: String,
-    },
-    CreateProject {
-        title: String,
-        parent_id: Option<String>,
-    },
-    RenameProject {
-        project_id: String,
-        title: String,
-        expected_version: i64,
-    },
-    SetProjectExpanded {
-        project_id: String,
-        is_expanded: bool,
-    },
-    SetAllProjectsExpanded {
-        is_expanded: bool,
-    },
-    ReorderProjectSiblings {
-        parent_id: Option<String>,
-        ordered_ids: Vec<String>,
-    },
-    MoveProject {
-        project_id: String,
-        target_parent_id: Option<String>,
-        expected_version: i64,
-    },
-    SetProjectProgress {
-        project_id: String,
-        date: Option<String>,
-        present: bool,
-        expected_version: i64,
-    },
-    CompleteProject {
-        project_id: String,
-        expected_version: i64,
-    },
-    CancelProject {
-        project_id: String,
-        expected_version: i64,
-    },
-    RestoreProject {
-        project_id: String,
-        expected_version: i64,
-    },
-    UpdateProjectTerminalDate {
-        project_id: String,
-        date: String,
-        expected_version: i64,
-    },
-    GetReminder {
-        reminder_id: String,
-    },
-    CreateReminder {
-        title: String,
-        scheduled_date: String,
-    },
-    RenameReminder {
-        reminder_id: String,
-        title: String,
-        expected_version: i64,
-    },
-    UpdateReminderSchedule {
-        reminder_id: String,
-        scheduled_date: String,
-        expected_version: i64,
-    },
-    CompleteReminder {
-        reminder_id: String,
-        expected_version: i64,
-    },
-    CancelReminder {
-        reminder_id: String,
-        expected_version: i64,
-    },
-    RestoreReminder {
-        reminder_id: String,
-        expected_version: i64,
-    },
-    UpdateReminderCompletedDate {
-        reminder_id: String,
-        date: String,
-        expected_version: i64,
-    },
-    ReorderReminders {
-        scheduled_date: String,
-        ordered_ids: Vec<String>,
-    },
-    GetDailyWeek {
-        week_start: String,
-    },
-    GetMonthCalendar {
-        month: String,
-    },
-    PreviewProjectTrash {
-        project_id: String,
-    },
-    TrashProject {
-        project_id: String,
-    },
-    TrashReminder {
-        reminder_id: String,
-    },
-    ListTrash {
-        kind: String,
-    },
-    RestoreTrashEntry {
-        entry_id: String,
-    },
-    PermanentlyDeleteTrashEntry {
-        entry_id: String,
-    },
-    EmptyTrash {
-        kind: String,
-    },
-    GetAppSettings,
-    SetThemeMode {
-        mode: String,
-    },
-}
-
-pub type ProgressMap = HashMap<String, Vec<String>>;
