@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  addDays,
   formatFullDate,
   formatMonthDay,
   formatMonthLabel,
@@ -8,9 +9,13 @@ import {
   formatTrashTimestamp,
   formatWeekdayShort,
   formatWeekRange,
+  getMonthCalendarLayout,
   getWeekStart,
   groupProgressDatesByMonth,
   isWeekendDate,
+  parseIsoDate,
+  shiftMonth,
+  toIsoDate,
 } from '../src/ui-format.ts'
 
 test('groupProgressDatesByMonth groups by descending year-month and sorts dates ascending within each month', () => {
@@ -60,4 +65,22 @@ test('isWeekendDate detects Saturday and Sunday accurately', () => {
   assert.equal(isWeekendDate('2026-11-13'), false) // Friday
   assert.equal(isWeekendDate('2026-11-14'), true) // Saturday
   assert.equal(isWeekendDate('2026-11-15'), true) // Sunday
+})
+
+test('date math helpers handle month, leap-year, and year boundaries', () => {
+  assert.equal(toIsoDate(parseIsoDate('2026-03-07')), '2026-03-07')
+  assert.equal(addDays('2025-12-30', 3), '2026-01-02')
+  assert.equal(addDays('2026-01-02', -3), '2025-12-30')
+  assert.equal(shiftMonth('2026-01', -1), '2025-12')
+  assert.equal(shiftMonth('2026-12', 1), '2027-01')
+
+  const febLeap = getMonthCalendarLayout('2024-02')
+  assert.equal(febLeap.leading, 3) // 2024-02-01 is Thursday (Mon=0..Thu=3)
+  assert.equal(febLeap.dates.length, 29)
+  assert.equal(febLeap.dates[0], '2024-02-01')
+  assert.equal(febLeap.dates[28], '2024-02-29')
+
+  const dec = getMonthCalendarLayout('2026-12')
+  assert.equal(dec.leading, 1) // 2026-12-01 is Tuesday
+  assert.equal(dec.dates.length, 31)
 })

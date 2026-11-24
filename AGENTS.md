@@ -3,8 +3,8 @@
 ## Project Structure & Module Organization
 
 - BranchTrace is an offline-first Tauri 2 application using React, TypeScript, Rust, and SQLite.
-- `src/` contains the UI (`App.tsx`), Tauri wrappers and browser mocks (`api.ts`), DTOs (`types.ts`), and styles (`index.css`).
-- `src-tauri/src/` contains commands and lifecycle handling (`lib.rs`), database operations (`db.rs`), and Rust DTOs (`models.rs`).
+- `src/` contains the shell (`App.tsx`), views (`views/`), modals (`modals/`), shared UI (`components/`, `hooks/`), Tauri API wrapper (`api.ts`), lazy browser mock (`mock/`), DTOs (`types.ts`), and styles (`index.css`).
+- `src-tauri/src/` contains commands and lifecycle handling (`lib.rs`), database modules (`db/`), and Rust DTOs (`models.rs`).
 - `src-tauri/migrations/` holds SQL migrations; `docs/` holds requirements and API contracts; `assets/` contains screenshots; `src-tauri/icons/` contains desktop icons.
 
 ## Build, Test, and Development Commands
@@ -27,7 +27,7 @@
 
 ## Testing Guidelines
 
-- Rust tests use `#[test]` in `src-tauri/src/db.rs`; database tests apply the real migration to in-memory SQLite. Use descriptive snake_case names.
+- Rust tests use `#[test]` in `src-tauri/src/db/tests.rs`; database tests apply the real migration to in-memory SQLite. Use descriptive snake_case names.
 - Add regression coverage for changed date, version, tree, transaction, and trash behavior.
 - Selector tests (Node 24): `node --test tests/*.test.mjs`; no coverage threshold is configured.
 - For UI changes, run `pnpm build` and smoke-test browser mocks and native persistence. Consult the acceptance cases in `docs/01_MVP_需求规格.md`.

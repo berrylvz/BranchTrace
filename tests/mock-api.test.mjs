@@ -223,3 +223,15 @@ test('month calendar returns full Mon-Sun grid, project counts, planned, cross-d
     (error) => error.code === 'INVALID_DATE',
   )
 })
+
+test('invalid trash category and theme mode return INVALID_INPUT', async () => {
+  const { api } = await createMockApi()
+  await assert.rejects(
+    api.listTrash('unknown'),
+    (error) => error.code === 'INVALID_INPUT',
+  )
+  await assert.rejects(
+    api.setThemeMode('sepia'),
+    (error) => error.code === 'INVALID_INPUT',
+  )
+})

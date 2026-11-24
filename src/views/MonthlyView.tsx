@@ -10,10 +10,15 @@ import {
   MinusIcon,
   ProgressArrowIcon,
   TrashIcon,
-} from './icons'
-import { ActionMenu, ConfirmDialog, FormDialog, isEditableElement, Modal } from './ui'
-import type { ActionRunner } from './ui'
+} from '../components/icons'
+import { ActionMenu, ConfirmDialog, FormDialog, isEditableElement, Modal } from '../components/ui'
+import type { ActionRunner } from '../components/ui'
+import { STATUS_TEXT } from '../constants'
+import type { DropPosition } from '../constants'
+import { usePeriodNavigationShortcuts } from '../hooks/useGlobalShortcut'
 import { computeReorderedIds } from '../project-tree'
+import { REMINDER_KEYS, TRASH_KEYS } from '../query-keys'
+import type { MonthCalendarDto, MonthDayDto, ReminderDailyItem } from '../types'
 import {
   formatFullDate,
   formatMonthDay,
@@ -21,21 +26,9 @@ import {
   formatShortDate,
   formatWeekdayShort,
   isWeekendDate,
+  shiftMonth,
+  WEEKDAYS,
 } from '../ui-format'
-import type { MonthCalendarDto, MonthDayDto, ReminderDailyItem } from '../types'
-
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
-const REMINDER_KEYS = ['dailyWeek', 'monthCalendar', 'reminder'] as const
-const TRASH_KEYS = ['projectTree', 'projectDetail', 'projectProgressMonth', 'dailyWeek', 'monthCalendar', 'reminder', 'trash'] as const
-const statusText = { active: 'Active', completed: 'Completed', canceled: 'Canceled' } as const
-
-type DropPosition = 'before' | 'after'
-
-function shiftMonth(monthKey: string, delta: number) {
-  const [year, month] = monthKey.split('-').map(Number)
-  const next = new Date(year, month - 1 + delta, 1, 12)
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
-}
 
 export function MonthlyView({
   calendar,
@@ -82,26 +75,7 @@ export function MonthlyView({
     onMonthChange(currentMonth)
   }, [currentMonth, onMonthChange])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return
-      if (document.getElementById('root')?.hasAttribute('inert')) return
-      if (document.querySelector('[role="menu"]')) return
-      if (isEditableElement(event.target)) return
-      if (event.key === 'ArrowLeft' || event.key === '[') {
-        event.preventDefault()
-        moveMonth(-1)
-      } else if (event.key === 'ArrowRight' || event.key === ']') {
-        event.preventDefault()
-        moveMonth(1)
-      } else if (event.key.toLowerCase() === 't') {
-        event.preventDefault()
-        jumpToCurrentMonth()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [moveMonth, jumpToCurrentMonth])
+  usePeriodNavigationShortcuts(moveMonth, jumpToCurrentMonth)
 
   const creatingQuick = pendingKey === 'monthly:quick-create'
   const effectiveToday = calendar?.today ?? today
@@ -348,7 +322,7 @@ function MonthCellReminderPreview({
       data-month-stop
       role="checkbox"
       aria-checked={reminder.status === 'completed'}
-      aria-label={`${reminder.title}, ${statusText[reminder.status]}`}
+      aria-label={`${reminder.title}, ${STATUS_TEXT[reminder.status]}`}
       className="reminder-check month-reminder-check"
       disabled={rowBusy || reminder.status === 'canceled'}
       onClick={toggle}
@@ -726,7 +700,7 @@ function MonthReminderRow({
         type="button"
         role="checkbox"
         aria-checked={reminder.status === 'completed'}
-        aria-label={`${reminder.title}, ${statusText[reminder.status]}`}
+        aria-label={`${reminder.title}, ${STATUS_TEXT[reminder.status]}`}
         className="reminder-check month-reminder-check"
         disabled={rowBusy || reminder.status === 'canceled'}
         onClick={toggle}

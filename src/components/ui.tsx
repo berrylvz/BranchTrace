@@ -387,3 +387,7 @@ export function ConfirmDialog({ title, description, confirmLabel, onConfirm, onC
 export function LoadError({ error, retry }: { error: unknown; retry: () => void }) {
   return <div className="load-error" role="alert"><span>{errorMessage(error)}</span><button type="button" className="text-button" onClick={retry}>Retry</button></div>
 }
+
+export function EmptyState({ children }: { children: ReactNode }) {
+  return <div className="empty-state">{children}</div>
+}
