@@ -134,7 +134,6 @@ export function ProjectRow({
   isFiltered,
   showInactiveHint,
   inactiveThresholdDays,
-  timelineDays,
   progressDatesByProject,
   dragState,
   dropPosition,
@@ -163,7 +162,6 @@ export function ProjectRow({
   isFiltered: boolean
   showInactiveHint: boolean
   inactiveThresholdDays: number
-  timelineDays: 14 | 30
   progressDatesByProject: ReadonlyMap<string, ReadonlySet<ISODate>>
   dragState: DragProjectState | null
   dropPosition: DropPosition | null
@@ -461,7 +459,6 @@ export function ProjectRow({
         <ActivityTimeline
           project={project}
           today={today}
-          windowDays={timelineDays}
           progressDatesByProject={progressDatesByProject}
           disabled={rowBusy}
           onOpenCalendar={() => onOpenCalendar(project.id)}

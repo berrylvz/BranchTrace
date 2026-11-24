@@ -95,6 +95,8 @@ test('daysBetween, getRecentWeekStarts, completion timing, and overdue duration 
   assert.equal(daysBetween('2024-02-28', '2024-03-01'), 2) // Leap year
   assert.equal(daysBetween('2025-12-30', '2026-01-02'), 3) // Cross year
 
+  assert.deepEqual(getRecentWeekStarts('2026-11-24', 7), ['2026-11-16', '2026-11-23'])
+  assert.deepEqual(getRecentWeekStarts('2026-11-29', 7), ['2026-11-23'])
   assert.deepEqual(getRecentWeekStarts('2026-11-24', 14), ['2026-11-09', '2026-11-16', '2026-11-23'])
   assert.deepEqual(getRecentWeekStarts('2026-01-03', 14), ['2025-12-15', '2025-12-22', '2025-12-29'])
   assert.equal(getRecentWeekStarts('2026-11-24', 30).length, 5)

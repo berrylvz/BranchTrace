@@ -105,15 +105,16 @@ test('buildActivityTimeline merges week cache and recentProgressDates with binar
   }]
 
   const progressMap = buildProgressDatesMapFromWeeks(weeks)
-  const cells = buildActivityTimeline(project, '2026-11-24', 14, progressMap)
+  const cells = buildActivityTimeline(project, '2026-11-24', 7, progressMap)
 
-  assert.equal(cells.length, 14)
-  assert.equal(cells[0].date, '2026-11-11')
-  assert.equal(cells[13].date, '2026-11-24')
-  assert.equal(cells[13].isToday, true)
+  assert.equal(cells.length, 7)
+  assert.equal(cells[0].date, '2026-11-18')
+  assert.equal(cells[6].date, '2026-11-24')
+  assert.equal(cells[6].isToday, true)
   assert.equal(cells.find((c) => c.date === '2026-11-18')?.hasProgress, true)
   assert.equal(cells.find((c) => c.date === '2026-11-22')?.hasProgress, true)
   assert.equal(cells.find((c) => c.date === '2026-11-23')?.hasProgress, true)
   assert.equal(cells.find((c) => c.date === '2026-11-23')?.isCompletedDay, true)
   assert.equal(cells.find((c) => c.date === '2026-11-19')?.hasProgress, false)
+  assert.equal(cells.find((c) => c.date === '2026-11-17'), undefined)
 })

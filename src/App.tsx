@@ -380,7 +380,6 @@ function AppShell() {
             pendingKey={pendingKey}
             today={today}
             selectedProjectId={selectedProjectId}
-            detailPanelOpen={Boolean(selectedProjectId)}
             focusCreateTick={focusCreateTick}
             focusSearchTick={focusSearchTick}
             addChildRequest={addChildRequest}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { api } from '../api'
+import { ACTIVITY_TIMELINE_DAYS } from '../components/ActivityTimeline'
 import { CloseIcon, CollapseAllIcon, ExpandAllIcon, PlusIcon, SearchIcon } from '../components/icons'
 import { EmptyState } from '../components/ui'
 import type { ActionRunner } from '../components/ui'
@@ -38,7 +39,6 @@ export function ProjectView({
   pendingKey,
   today,
   selectedProjectId,
-  detailPanelOpen,
   focusCreateTick,
   focusSearchTick,
   addChildRequest,
@@ -53,7 +53,6 @@ export function ProjectView({
   pendingKey: string | null
   today: ISODate
   selectedProjectId: string | null
-  detailPanelOpen: boolean
   focusCreateTick: number
   focusSearchTick: number
   addChildRequest: { parentId: string; tick: number } | null
@@ -72,17 +71,10 @@ export function ProjectView({
   const [locatedExpandedIds, setLocatedExpandedIds] = useState<Set<string>>(() => new Set())
   const [dragState, setDragState] = useState<DragProjectState | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; position: DropPosition } | null>(null)
-  const [wideViewport, setWideViewport] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1440 : false))
 
   const createInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const treeRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const onResize = () => setWideViewport(window.innerWidth >= 1440)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
 
   useEffect(() => {
     if (focusCreateTick > 0) createInputRef.current?.focus({ preventScroll: true })
@@ -128,8 +120,7 @@ export function ProjectView({
     }
   }, [locateTarget, projects])
 
-  const timelineDays: 14 | 30 = wideViewport && !detailPanelOpen ? 30 : 14
-  const recentWeekStarts = useMemo(() => getRecentWeekStarts(today, 30), [today])
+  const recentWeekStarts = useMemo(() => getRecentWeekStarts(today, ACTIVITY_TIMELINE_DAYS), [today])
   const weekQueries = useQueries({
     queries: recentWeekStarts.map((ws) => ({
       queryKey: ['dailyWeek', ws],
@@ -400,7 +391,6 @@ export function ProjectView({
             isFiltered={filtered.isFiltered}
             showInactiveHint={filter === 'inactive'}
             inactiveThresholdDays={inactiveDays}
-            timelineDays={timelineDays}
             progressDatesByProject={progressDatesByProject}
             dragState={dragState}
             dropPosition={dropTarget?.id === item.row.project.id ? dropTarget.position : null}

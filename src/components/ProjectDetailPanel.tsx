@@ -191,7 +191,6 @@ export function ProjectDetailPanel({
           <ActivityTimeline
             project={detail}
             today={today}
-            windowDays={30}
             progressDatesByProject={exactProgressMap}
             variant="panel"
             onOpenCalendar={() => onOpenCalendar(detail.id)}

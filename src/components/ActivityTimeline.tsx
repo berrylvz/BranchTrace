@@ -3,6 +3,8 @@ import { buildActivityTimeline } from '../project-filters'
 import type { ISODate, ProjectDto } from '../types'
 import { formatFullDate } from '../ui-format'
 
+export const ACTIVITY_TIMELINE_DAYS = 7
+
 function cellTooltip(date: ISODate, hasProgress: boolean, isCompletedDay: boolean, isToday: boolean) {
   const datePart = `${formatFullDate(date)}${isToday ? ' (Today)' : ''}`
   if (isCompletedDay && hasProgress) return `${datePart} · Completed & progress logged`
@@ -14,7 +16,7 @@ function cellTooltip(date: ISODate, hasProgress: boolean, isCompletedDay: boolea
 export function ActivityTimeline({
   project,
   today,
-  windowDays,
+  windowDays = ACTIVITY_TIMELINE_DAYS,
   progressDatesByProject,
   variant = 'inline',
   disabled = false,
@@ -22,7 +24,7 @@ export function ActivityTimeline({
 }: {
   project: ProjectDto
   today: ISODate
-  windowDays: 14 | 30
+  windowDays?: number
   progressDatesByProject?: ReadonlyMap<string, ReadonlySet<ISODate>>
   variant?: 'inline' | 'panel'
   disabled?: boolean

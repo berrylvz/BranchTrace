@@ -237,13 +237,23 @@
   background: transparent;
   color: var(--color-text-muted);
   cursor: grab;
-  opacity: 0;
   transition: opacity var(--transition-fast), color var(--transition-fast);
 }
 .drag-handle:hover:not(:disabled) { color: var(--color-text-primary); }
 .drag-handle:active { cursor: grabbing; }
+.project-row .drag-handle {
+  opacity: 0;
+  pointer-events: none;
+}
 .project-row:hover .drag-handle,
-.project-row:focus-within .drag-handle { opacity: 1; }
+.project-row:focus-within .drag-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+.project-row:hover .drag-handle:disabled,
+.project-row:focus-within .drag-handle:disabled {
+  opacity: .5;
+}
 
 .tree-toggle,
 .tree-spacer { width: 28px; flex: 0 0 auto; }
@@ -439,7 +449,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Daily Progress Action Slot (Fixed width to align across rows) */
+/* Daily Progress Status & Hover/Focus Log Action Slot (Fixed width to align across rows) */
 .progress-slot {
   width: 112px;
   flex: 0 0 112px;
@@ -462,15 +472,34 @@
   font-size: var(--font-size-sm);
   font-weight: 500;
   white-space: nowrap;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition: opacity var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
-.project-row:hover .progress-button:not(.checked):not(:disabled) {
+.project-row .progress-button:not(.checked) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.project-row:hover .progress-button:not(.checked),
+.project-row:focus-within .progress-button:not(.checked),
+.project-row .progress-button:not(.checked)[aria-busy="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.project-row:hover .progress-button:not(.checked):disabled,
+.project-row:focus-within .progress-button:not(.checked):disabled,
+.project-row .progress-button:not(.checked)[aria-busy="true"]:disabled {
+  opacity: .5;
+}
+
+.project-row:hover .progress-button:not(.checked):not(:disabled),
+.project-row:focus-within .progress-button:not(.checked):not(:disabled) {
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
 
-.progress-button:hover:not(:disabled) {
+.project-row .progress-button:not(.checked):hover:not(:disabled) {
   color: var(--color-primary-ink);
   border-color: var(--color-primary-fill, var(--color-primary));
   background: var(--color-primary-fill, var(--color-primary));
@@ -478,12 +507,17 @@
 
 .progress-button.checked {
   color: var(--color-progress);
-  border-color: var(--color-progress-border);
+  border-color: transparent;
   background: var(--color-progress-soft);
   font-weight: 600;
 }
 
-.progress-button.checked:hover:not(:disabled) {
+.project-row:hover .progress-button.checked:not(:disabled),
+.project-row:focus-within .progress-button.checked:not(:disabled) {
+  border-color: var(--color-progress-border);
+}
+
+.project-row .progress-button.checked:hover:not(:disabled) {
   border-color: var(--color-progress);
   background: var(--color-progress-soft);
   color: var(--color-progress);
@@ -499,9 +533,10 @@
   gap: 2px;
 }
 
-.row-quick-actions .add-child-button,
-.row-quick-actions .more-button {
+.project-row .row-quick-actions .add-child-button,
+.project-row .row-quick-actions .more-button {
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
 }
 
@@ -509,9 +544,16 @@
 .project-row:hover .row-quick-actions .more-button,
 .project-row:focus-within .row-quick-actions .add-child-button,
 .project-row:focus-within .row-quick-actions .more-button,
-.project-row.is-selected .row-quick-actions .more-button,
-.row-quick-actions .more-button[aria-expanded="true"] {
+.project-row .row-quick-actions .more-button[aria-expanded="true"] {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.project-row:hover .row-quick-actions .add-child-button:disabled,
+.project-row:hover .row-quick-actions .more-button:disabled,
+.project-row:focus-within .row-quick-actions .add-child-button:disabled,
+.project-row:focus-within .row-quick-actions .more-button:disabled {
+  opacity: .5;
 }
 
 /* Inline Child Creation Row */
@@ -597,8 +639,8 @@
 
 .detail-timeline-grid {
   display: grid;
-  grid-template-columns: repeat(15, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
 }
 
 .detail-timeline-grid .activity-cell {
@@ -638,19 +680,28 @@
 }
 
 @media (hover: none) {
-  .drag-handle,
-  .row-quick-actions .add-child-button,
-  .row-quick-actions .more-button {
+  .project-row .drag-handle,
+  .project-row .progress-button:not(.checked),
+  .project-row .row-quick-actions .add-child-button,
+  .project-row .row-quick-actions .more-button {
     opacity: 1;
+    pointer-events: auto;
+  }
+
+  .project-row .drag-handle:disabled,
+  .project-row .progress-button:not(.checked):disabled,
+  .project-row .row-quick-actions .add-child-button:disabled,
+  .project-row .row-quick-actions .more-button:disabled {
+    opacity: .5;
   }
 }
 
 @media (max-width: 900px) {
-  .activity-timeline-grid { display: none; }
   .terminal-date-badge { display: none; }
 }
 
 @media (max-width: 680px) {
+  .activity-timeline-grid { display: none; }
   .projects-toolbar-right { justify-content: stretch; }
   .project-search-box,
   .create-bar { flex: 1 1 100%; width: 100%; max-width: none; }
