@@ -15,7 +15,7 @@ export function useGlobalShortcut(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
+      if (event.defaultPrevented || event.isComposing) return
       if (!allowModifiers && (event.ctrlKey || event.metaKey || event.altKey)) return
       if (document.getElementById('root')?.hasAttribute('inert')) return
       if (document.querySelector('[role="menu"]')) return

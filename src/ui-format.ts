@@ -1,4 +1,4 @@
-import type { ISODate } from './types'
+import type { ISODate, ReminderDto } from './types'
 
 const MONTH_NAMES = [
   'January',
@@ -155,4 +155,69 @@ export function formatTrashTimestamp(isoString: string) {
 export function isWeekendDate(value: ISODate) {
   const day = parseIsoDate(value).getDay()
   return day === 0 || day === 6
+}
+
+export function daysBetween(fromIso: ISODate, toIso: ISODate): number {
+  const from = parseIsoDate(fromIso)
+  const to = parseIsoDate(toIso)
+  const utcFrom = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())
+  const utcTo = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate())
+  return Math.round((utcTo - utcFrom) / 86_400_000)
+}
+
+export function getRecentWeekStarts(today: ISODate, windowDays: number): ISODate[] {
+  const count = Math.max(1, Math.floor(windowDays))
+  const startDate = addDays(today, -(count - 1))
+  const firstWeekStart = getWeekStart(startDate)
+  const lastWeekStart = getWeekStart(today)
+  const starts: ISODate[] = []
+  let cursor = firstWeekStart
+  while (cursor <= lastWeekStart) {
+    starts.push(cursor)
+    cursor = addDays(cursor, 7)
+  }
+  return starts
+}
+
+export interface ReminderCompletionTiming {
+  label: string
+  shortLabel: string
+  tone: 'on-time' | 'early' | 'late'
+  deltaDays: number
+}
+
+export function describeReminderCompletionTiming(
+  reminder: Pick<ReminderDto, 'status' | 'scheduledDate' | 'completedDate'>,
+): ReminderCompletionTiming | null {
+  if (reminder.status !== 'completed' || !reminder.completedDate) return null
+  const deltaDays = daysBetween(reminder.scheduledDate, reminder.completedDate)
+  if (deltaDays === 0) {
+    return {
+      label: 'Completed on time',
+      shortLabel: 'On time',
+      tone: 'on-time',
+      deltaDays: 0,
+    }
+  }
+  if (deltaDays < 0) {
+    const days = Math.abs(deltaDays)
+    return {
+      label: `Completed ${days} ${days === 1 ? 'day' : 'days'} early`,
+      shortLabel: `${days}d early`,
+      tone: 'early',
+      deltaDays,
+    }
+  }
+  return {
+    label: `Completed ${deltaDays} ${deltaDays === 1 ? 'day' : 'days'} late`,
+    shortLabel: `${deltaDays}d late`,
+    tone: 'late',
+    deltaDays,
+  }
+}
+
+export function formatOverdueDuration(scheduledDate: ISODate, today: ISODate): string {
+  const days = daysBetween(scheduledDate, today)
+  if (days <= 0) return 'Due today'
+  return `${days} ${days === 1 ? 'day' : 'days'} overdue`
 }

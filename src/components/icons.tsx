@@ -156,3 +156,98 @@ export function KeyboardIcon(props: IconProps) {
     <path d="M4.5 6.5h1M7.5 6.5h1M10.5 6.5h1M5 9.5h6" />
   </Icon>
 }
+
+export function CalendarRangeIcon(props: IconProps) {
+  return <Icon {...props}>
+    <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2" />
+    <path d="M5.25 1.75v2.75M10.75 1.75v2.75M2.25 6.75h11.5M5 9.75h6" />
+  </Icon>
+}
+
+export function CalendarDaysIcon(props: IconProps) {
+  return <Icon {...props}>
+    <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2" />
+    <path d="M5.25 1.75v2.75M10.75 1.75v2.75M2.25 6.75h11.5" />
+    <circle cx="5.5" cy="9.5" r=".7" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="9.5" r=".7" fill="currentColor" stroke="none" />
+    <circle cx="10.5" cy="9.5" r=".7" fill="currentColor" stroke="none" />
+    <circle cx="5.5" cy="11.75" r=".7" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="11.75" r=".7" fill="currentColor" stroke="none" />
+  </Icon>
+}
+
+export function TrendingUpIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M2.25 11.25 6.25 7.25 8.75 9.75 13.75 4.75" />
+    <path d="M10.25 4.75h3.5v3.5" />
+  </Icon>
+}
+
+export function ClockAlertIcon(props: IconProps) {
+  return <Icon {...props}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </Icon>
+}
+
+export function SearchIcon(props: IconProps) {
+  return <Icon {...props}>
+    <circle cx="7.25" cy="7.25" r="4.5" />
+    <path d="m10.75 10.75 3 3" />
+  </Icon>
+}
+
+export function ListFilterIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M2.5 4h11M4.5 8h7M6.5 12h3" />
+  </Icon>
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return <Icon {...props}><path d="M3.75 6 8 10.25 12.25 6" /></Icon>
+}
+
+export function ColumnsIcon(props: IconProps) {
+  return <Icon {...props}>
+    <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.75" />
+    <path d="M6.25 2.75v10.5M9.75 2.75v10.5" />
+  </Icon>
+}
+
+export function ListIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M5.75 4.5h7.5M5.75 8h7.5M5.75 11.5h7.5" />
+    <circle cx="3.25" cy="4.5" r=".75" fill="currentColor" stroke="none" />
+    <circle cx="3.25" cy="8" r=".75" fill="currentColor" stroke="none" />
+    <circle cx="3.25" cy="11.5" r=".75" fill="currentColor" stroke="none" />
+  </Icon>
+}
+
+export function ExternalLinkIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M9.5 2.75h3.75V6.5M6.75 9.25l6.5-6.5" />
+    <path d="M12.25 9.25v2.5a1.5 1.5 0 0 1-1.5 1.5h-6.5a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5h2.5" />
+  </Icon>
+}
+
+export function LocateIcon(props: IconProps) {
+  return <Icon {...props}>
+    <circle cx="8" cy="8" r="3.5" />
+    <path d="M8 2v2M8 12v2M2 8h2M12 8h2" />
+  </Icon>
+}
+
+export function ActivityIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M2 8.5h2.5l1.75-4.5 3 8 2-3.5H14" />
+  </Icon>
+}
+
+export function SlidersIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M3 4.5h10M3 8h10M3 11.5h10" />
+    <circle cx="6" cy="4.5" r="1.25" fill="var(--color-surface, #fff)" />
+    <circle cx="10.5" cy="8" r="1.25" fill="var(--color-surface, #fff)" />
+    <circle cx="7" cy="11.5" r="1.25" fill="var(--color-surface, #fff)" />
+  </Icon>
+}

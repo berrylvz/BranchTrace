@@ -4,10 +4,11 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: '#25382e',
-        paper: '#f7f9f8',
-        branch: '#24745b',
-        ember: '#96602d',
+        ink: '#24352e',
+        paper: '#f6f8f7',
+        branch: '#216e57',
+        progress: '#5479a8',
+        ember: '#b45309',
       },
     },
   },

@@ -1,11 +1,16 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { BranchNodeIcon, ReminderIcon } from '../components/icons'
-import { ConfirmDialog, EmptyState } from '../components/ui'
+import { ConfirmDialog, EmptyState, SegmentedControl } from '../components/ui'
 import type { ActionRunner } from '../components/ui'
 import { TRASH_KEYS } from '../query-keys'
 import type { TrashEntryDto } from '../types'
 import { formatTrashTimestamp } from '../ui-format'
+
+const TRASH_TABS = [
+  { value: 'project', label: 'Projects' },
+  { value: 'reminder', label: 'Reminders' },
+] as const
 
 export function TrashView({
   kind,
@@ -29,8 +34,12 @@ export function TrashView({
       <div className="page-title"><h1>Trash</h1><span className="count-label">{entries.length}</span></div>
       <button type="button" className="text-button danger-text" disabled={emptying || loading || !entries.length} onClick={() => setConfirmEmpty(true)}>Empty Current Tab</button>
     </div>
-    <div className="segmented" aria-label="Trash category"><button type="button" aria-pressed={kind === 'project'} onClick={() => onKindChange('project')}>Projects</button><button type="button" aria-pressed={kind === 'reminder'} onClick={() => onKindChange('reminder')}>Reminders</button></div>
-    <div className="trash-list card" aria-busy={loading}>{loading ? <div className="loading-state">Loading Trash…</div> : entries.length ? entries.map((entry) => <TrashRow key={entry.id} entry={entry} pending={pendingKey === `trash:${entry.id}` || emptying} onAction={onAction} />) : <EmptyState>Trash is empty.</EmptyState>}</div>
+    <SegmentedControl label="Trash category" value={kind} options={TRASH_TABS} onChange={onKindChange} />
+    <div className="trash-list card" aria-busy={loading}>
+      {loading ? <div className="loading-state">Loading Trash…</div> : entries.length
+        ? entries.map((entry) => <TrashRow key={entry.id} entry={entry} pending={pendingKey === `trash:${entry.id}` || emptying} onAction={onAction} />)
+        : <EmptyState title="Trash is empty." description={`Deleted ${kind === 'project' ? 'projects' : 'reminders'} will appear here for recovery.`} />}
+    </div>
     {confirmEmpty && <ConfirmDialog title="Empty Trash" description={`Permanently delete ${entries.length} ${kind === 'project' ? 'project' : 'reminder'} ${entries.length === 1 ? 'entry' : 'entries'} and all associated data.${kind === 'project' ? ' All descendants and progress history will also be removed.' : ''} This action cannot be undone.`} confirmLabel="Delete Permanently" onClose={() => setConfirmEmpty(false)} onConfirm={() => onAction(() => api.emptyTrash(kind), 'Trash emptied', { key: 'trash:empty', invalidate: TRASH_KEYS })} />}
   </section>
 }

@@ -1,3 +1,6 @@
+import type { MonthlyDisplayMode } from './preferences.ts'
+import type { MonthDayDto, ReminderDailyItem } from './types'
+
 export type MonthDensity = 'comfortable' | 'cozy' | 'compact'
 
 export interface MonthCellMetrics {
@@ -146,4 +149,44 @@ export function computeOverdueStripLayout(
     : 0
   const visibleCount = Math.min(fitWithMore, Math.max(0, totalCount - 1))
   return { visibleCount, hiddenCount: totalCount - visibleCount }
+}
+
+export interface CellReminderEntry {
+  key: string
+  item: ReminderDailyItem
+}
+
+export function getCellRemindersForDisplayMode(
+  day: Pick<MonthDayDto, 'plannedReminders' | 'crossDayCompletedReminders'>,
+  mode: MonthlyDisplayMode,
+): CellReminderEntry[] {
+  if (mode === 'planned') {
+    return day.plannedReminders.map((item) => ({
+      key: `planned-${item.reminder.id}`,
+      item,
+    }))
+  }
+
+  if (mode === 'actual') {
+    const seen = new Set<string>()
+    const entries: CellReminderEntry[] = []
+    for (const item of day.plannedReminders) {
+      if (item.isPlannedAndCompletedSameDay && !seen.has(item.reminder.id)) {
+        seen.add(item.reminder.id)
+        entries.push({ key: `actual-same-${item.reminder.id}`, item })
+      }
+    }
+    for (const item of day.crossDayCompletedReminders) {
+      if (!seen.has(item.reminder.id)) {
+        seen.add(item.reminder.id)
+        entries.push({ key: `actual-cross-${item.reminder.id}`, item })
+      }
+    }
+    return entries
+  }
+
+  return [
+    ...day.plannedReminders.map((item) => ({ key: `planned-${item.reminder.id}`, item })),
+    ...day.crossDayCompletedReminders.map((item) => ({ key: `completed-${item.reminder.id}`, item })),
+  ]
 }

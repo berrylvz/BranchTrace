@@ -1,7 +1,17 @@
 import { Component, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { BranchNodeIcon, CloseIcon, MoreHorizontalIcon } from './icons'
+import type { ProjectStatus } from '../types'
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BranchNodeIcon,
+  CheckIcon,
+  ClockAlertIcon,
+  CloseIcon,
+  MinusIcon,
+  MoreHorizontalIcon,
+} from './icons'
 
 export interface NoticeAction {
   label: string
@@ -388,6 +398,185 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
   return <div className="load-error" role="alert"><span>{errorMessage(error)}</span><button type="button" className="text-button" onClick={retry}>Retry</button></div>
 }
 
-export function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="empty-state">{children}</div>
+export function EmptyState({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title?: string
+  description?: string
+  action?: ReactNode
+  children?: ReactNode
+}) {
+  return <div className="empty-state">
+    {title && <p className="empty-state-title">{title}</p>}
+    {description && <p className="empty-state-desc">{description}</p>}
+    {children}
+    {action && <div className="empty-state-action">{action}</div>}
+  </div>
+}
+
+export type BadgeTone = 'neutral' | 'primary' | 'completed' | 'progress' | 'overdue' | 'canceled' | 'danger'
+
+export function Badge({
+  tone = 'neutral',
+  title,
+  className = '',
+  children,
+}: {
+  tone?: BadgeTone
+  title?: string
+  className?: string
+  children: ReactNode
+}) {
+  return <span className={`ui-badge tone-${tone} ${className}`.trim()} title={title}>{children}</span>
+}
+
+export function StatusIcon({
+  status,
+  overdue = false,
+  readOnly = false,
+  size = 'md',
+  label,
+}: {
+  status: ProjectStatus
+  overdue?: boolean
+  readOnly?: boolean
+  size?: 'sm' | 'md'
+  label?: string
+}) {
+  const iconSize = size === 'sm' ? 9 : 10
+  if (overdue && status === 'active') {
+    return <span
+      className={`status-icon status-overdue ${size === 'sm' ? 'sm' : ''}`}
+      role={label ? 'img' : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      title={label}
+    >
+      <ClockAlertIcon size={size === 'sm' ? 14 : 15} strokeWidth={1.85} />
+    </span>
+  }
+  return <span
+    className={`status-icon status-${status} ${readOnly ? 'is-readonly' : ''} ${size === 'sm' ? 'sm' : ''}`}
+    role={label ? 'img' : undefined}
+    aria-label={label}
+    aria-hidden={label ? undefined : true}
+    title={label}
+  >
+    {status === 'completed' && <CheckIcon size={iconSize} strokeWidth={2.4} />}
+    {status === 'canceled' && <MinusIcon size={iconSize} strokeWidth={2.3} />}
+  </span>
+}
+
+export function SegmentedControl<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  value: T
+  options: readonly { value: T; label: string; icon?: ReactNode; title?: string }[]
+  onChange: (value: T) => void
+  disabled?: boolean
+}) {
+  return <div className="segmented" role="group" aria-label={label}>
+    {options.map((option) => <button
+      key={option.value}
+      type="button"
+      aria-pressed={value === option.value}
+      disabled={disabled}
+      title={option.title}
+      onClick={() => onChange(option.value)}
+    >
+      {option.icon}
+      <span>{option.label}</span>
+    </button>)}
+  </div>
+}
+
+export function DateNavigator({
+  onPrev,
+  onToday,
+  onNext,
+  todayLabel,
+  isCurrent,
+  prevLabel,
+  nextLabel,
+  disabled = false,
+}: {
+  onPrev: () => void
+  onToday: () => void
+  onNext: () => void
+  todayLabel: string
+  isCurrent: boolean
+  prevLabel: string
+  nextLabel: string
+  disabled?: boolean
+}) {
+  return <div className="date-navigator" role="group" aria-label="Date navigation">
+    <button type="button" disabled={disabled} onClick={onPrev} aria-label={prevLabel} title={`${prevLabel} (←)`}><ArrowLeftIcon size={15} /></button>
+    <button type="button" className={isCurrent ? 'is-current' : ''} disabled={disabled} onClick={onToday} title={`Jump to ${todayLabel.toLowerCase()} (T)`}>{todayLabel}</button>
+    <button type="button" disabled={disabled} onClick={onNext} aria-label={nextLabel} title={`${nextLabel} (→)`}><ArrowRightIcon size={15} /></button>
+  </div>
+}
+
+export function SidePanel({
+  title,
+  badge,
+  headerActions,
+  ariaLabel,
+  overlay = false,
+  onClose,
+  children,
+}: {
+  title: string
+  badge?: ReactNode
+  headerActions?: ReactNode
+  ariaLabel?: string
+  overlay?: boolean
+  onClose: () => void
+  children: ReactNode
+}) {
+  const panelRef = useRef<HTMLElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (document.querySelector('[role="dialog"]') || document.querySelector('[role="menu"]')) return
+      if (isEditableElement(event.target)) return
+      const panels = document.querySelectorAll('.side-panel')
+      if (panels.length > 0 && panels[panels.length - 1] !== panelRef.current) return
+      event.preventDefault()
+      closeRef.current()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  return <>
+    <div className={`side-panel-backdrop ${overlay ? 'is-overlay' : ''}`} onClick={onClose} aria-hidden="true" />
+    <aside ref={panelRef} className={`side-panel ${overlay ? 'is-overlay' : ''}`} role="complementary" aria-label={ariaLabel ?? title}>
+      <header className="side-panel-header">
+        <div className="side-panel-heading">
+          <h2 title={title}>{title}</h2>
+          {badge}
+        </div>
+        <div className="side-panel-header-actions">
+          {headerActions}
+          <button type="button" className="icon-button" onClick={onClose} aria-label={`Close ${title}`} title="Close (Esc)">
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      </header>
+      <div className="side-panel-body">
+        {children}
+      </div>
+    </aside>
+  </>
 }

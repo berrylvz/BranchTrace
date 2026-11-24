@@ -1,0 +1,256 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.app-shell.view-monthly {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+/* Global Topbar */
+.topbar {
+  height: var(--topbar-height);
+  flex-shrink: 0;
+  padding: 0 var(--page-pad-x);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  user-select: none;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: var(--color-primary-ink);
+  background: var(--color-primary-fill, var(--color-primary));
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--color-text-primary);
+}
+
+.main-nav {
+  display: flex;
+  align-self: stretch;
+  gap: var(--space-1);
+}
+
+.nav-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 0 14px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  transition: color var(--transition-fast);
+}
+
+.nav-item:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.nav-item.active {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.nav-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--color-primary);
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.today-text {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.top-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border);
+}
+
+.utility-nav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.utility-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  background: transparent;
+  transition: color var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.utility-button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.utility-button.active {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-ring);
+}
+
+/* Main Workspace & Split SidePanel Shell */
+.workspace-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--page-pad-y) var(--page-pad-x) var(--space-8);
+}
+
+.app-shell.view-monthly .main-content {
+  overflow: hidden;
+  padding: 14px var(--page-pad-x) 14px;
+}
+
+.view-stack {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--panel-gap);
+}
+
+/* Unified Page Toolbar */
+.page-toolbar {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.page-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.page-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.count-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.period-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+/* Responsive Desktop Breakpoints */
+@media (max-width: 1199px) {
+  .side-panel-backdrop {
+    display: block;
+  }
+}
+
+@media (max-height: 760px) {
+  .app-shell.view-monthly .main-content { padding-block: 10px; }
+}
+
+@media (max-width: 760px) {
+  .topbar { padding: 0 12px; gap: 10px; }
+  .brand-name { display: none; }
+  .nav-item { padding: 0 10px; gap: 5px; }
+  .today-text { display: none; }
+  .top-divider { display: none; }
+  .main-content { padding: 14px 12px 28px; }
+  .app-shell.view-monthly .main-content { padding-inline: 12px; }
+  .page-toolbar { gap: 8px 10px; }
+}

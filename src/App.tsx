@@ -2,21 +2,31 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
-import { BranchNodeIcon, CloseIcon, SettingsIcon, TrashIcon } from './components/icons'
+import {
+  BranchNodeIcon,
+  CalendarDaysIcon,
+  CalendarRangeIcon,
+  CloseIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+  TrashIcon,
+} from './components/icons'
+import { ProjectDetailPanel } from './components/ProjectDetailPanel'
 import { AppErrorBoundary, errorMessage, LoadError } from './components/ui'
 import type { ActionRunner, NoticeConfig } from './components/ui'
 import { useGlobalShortcut } from './hooks/useGlobalShortcut'
 import { ProgressCalendarModal } from './modals/ProgressCalendarModal'
-import { ProjectDetailModal } from './modals/ProjectDetailModal'
-import { ALL_QUERY_KEYS } from './query-keys'
-import type { ApiError } from './types'
+import { loadDisplayDensity, saveDisplayDensity } from './preferences'
+import type { DisplayDensity } from './preferences'
+import { ALL_QUERY_KEYS, SETTINGS_KEYS } from './query-keys'
+import type { ApiError, ISODate } from './types'
 import { formatFullDate, getWeekStart, todayIsoDate } from './ui-format'
 import { MonthlyView } from './views/MonthlyView'
 import { ProjectView } from './views/ProjectView'
 import { SettingsView } from './views/SettingsView'
 import { TrashView } from './views/TrashView'
 import { WeeklyView } from './views/WeeklyView'
-import './index.css'
 
 function isStartupError(error: unknown): error is ApiError {
   if (typeof error !== 'object' || error === null || !('code' in error)) return false
@@ -38,6 +48,8 @@ type View = 'project' | 'weekly' | 'monthly' | 'trash' | 'settings'
 function AppShell() {
   const client = useQueryClient()
   const [view, setView] = useState<View>('project')
+  const [density, setDensity] = useState<DisplayDensity>(() => loadDisplayDensity())
+  const [effectiveDark, setEffectiveDark] = useState(false)
   const [weekStart, setWeekStart] = useState<string | null>(null)
   const [month, setMonth] = useState<string | null>(null)
   const [focusedDate, setFocusedDate] = useState<string | null>(null)
@@ -49,6 +61,11 @@ function AppShell() {
   const [noticePaused, setNoticePaused] = useState(false)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
   const [focusCreateTick, setFocusCreateTick] = useState(0)
+  const [focusSearchTick, setFocusSearchTick] = useState(0)
+  const [focusMonthlyCreateTick, setFocusMonthlyCreateTick] = useState(0)
+  const [addChildRequest, setAddChildRequest] = useState<{ parentId: string; tick: number } | null>(null)
+  const [locateTarget, setLocateTarget] = useState<{ projectId: string; tick: number } | null>(null)
+  const [monthlyDateRequest, setMonthlyDateRequest] = useState<{ date: ISODate; tick: number } | null>(null)
   const actionLock = useRef(false)
   const previousClock = useRef<{ today: string; weekStart: string } | null>(null)
 
@@ -59,6 +76,10 @@ function AppShell() {
   const monthly = useQuery({ queryKey: ['monthCalendar', month], queryFn: () => api.getMonthCalendar(month!), enabled: view === 'monthly' && Boolean(month) })
   const trash = useQuery({ queryKey: ['trash', trashKind], queryFn: () => api.listTrash(trashKind), enabled: view === 'trash' })
   const detail = useQuery({ queryKey: ['projectDetail', selectedProjectId], queryFn: () => api.getProjectDetail(selectedProjectId!), enabled: Boolean(selectedProjectId) })
+
+  useEffect(() => {
+    document.documentElement.dataset.density = density
+  }, [density])
 
   useEffect(() => {
     const current = clock.data
@@ -106,8 +127,9 @@ function AppShell() {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const apply = () => {
       const dark = mode === 'dark' || (mode === 'system' && media.matches)
+      setEffectiveDark(dark)
       document.documentElement.classList.toggle('dark', dark)
-      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#131a16' : '#f6f8f7')
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#121916' : '#f6f8f7')
     }
     apply()
     if (mode !== 'system') return
@@ -121,18 +143,18 @@ function AppShell() {
     void client
       .fetchQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, staleTime: 0 })
       .then((fresh) => {
-        setWeekStart(fresh.weekStart)
+        setWeekStart((current) => current ?? fresh.weekStart)
         return Promise.all([
           client.invalidateQueries({ queryKey: ['dailyWeek'] }),
           client.invalidateQueries({ queryKey: ['projectTree'] }),
         ])
       })
       .catch(() => {
-        if (clock.data) setWeekStart(clock.data.weekStart)
+        if (clock.data) setWeekStart((current) => current ?? clock.data!.weekStart)
       })
   }, [client, clock.data])
 
-  const openWeeklyForDate = useCallback((date: string) => {
+  const openWeeklyForDate = useCallback((date: ISODate) => {
     const targetWeek = getWeekStart(date)
     setWeekStart(targetWeek)
     setFocusedDate(date)
@@ -157,16 +179,56 @@ function AppShell() {
         ])
       })
       .catch(() => {
-        if (clock.data) setMonth((current) => current ?? clock.data.today.slice(0, 7))
+        if (clock.data) setMonth((current) => current ?? clock.data!.today.slice(0, 7))
       })
   }, [client, clock.data])
 
+  const openMonthlyForDate = useCallback((date: ISODate) => {
+    const targetMonth = date.slice(0, 7)
+    setMonth(targetMonth)
+    setSelectedProjectId(null)
+    setMonthlyDateRequest({ date, tick: Date.now() })
+    setView('monthly')
+    void Promise.all([
+      client.invalidateQueries({ queryKey: ['clockContext'] }),
+      client.invalidateQueries({ queryKey: ['monthCalendar', targetMonth] }),
+    ])
+  }, [client])
+
+  const locateProject = useCallback((projectId: string) => {
+    setView('project')
+    setSelectedProjectId(projectId)
+    setLocateTarget({ projectId, tick: Date.now() })
+  }, [])
+
+  const startAddChildFromPanel = useCallback((parentId: string) => {
+    setView('project')
+    setAddChildRequest({ parentId, tick: Date.now() })
+  }, [])
+
+  const handleDensityChange = useCallback((next: DisplayDensity) => {
+    setDensity(next)
+    saveDisplayDensity(next)
+  }, [])
+
   useGlobalShortcut((event) => {
     const mod = event.ctrlKey || event.metaKey
-    if (mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
+    const lower = event.key.toLowerCase()
+
+    if (mod && !event.altKey && !event.shiftKey && (lower === 'k' || lower === 'f')) {
       event.preventDefault()
       setView('project')
-      setFocusCreateTick((tick) => tick + 1)
+      setFocusSearchTick((tick) => tick + 1)
+      return
+    }
+    if (mod && !event.altKey && !event.shiftKey && lower === 'n') {
+      event.preventDefault()
+      if (view === 'monthly') {
+        setFocusMonthlyCreateTick((tick) => tick + 1)
+      } else {
+        setView('project')
+        setFocusCreateTick((tick) => tick + 1)
+      }
       return
     }
     if (!event.altKey && !event.shiftKey && (event.key === '1' || event.key === '2' || event.key === '3')) {
@@ -176,10 +238,14 @@ function AppShell() {
       else openMonthlyView()
       return
     }
-    if (!mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
+    if (!mod && !event.altKey && !event.shiftKey && lower === 'n') {
       event.preventDefault()
-      setView('project')
-      setFocusCreateTick((tick) => tick + 1)
+      if (view === 'monthly') {
+        setFocusMonthlyCreateTick((tick) => tick + 1)
+      } else {
+        setView('project')
+        setFocusCreateTick((tick) => tick + 1)
+      }
     }
   }, { allowModifiers: true })
 
@@ -203,7 +269,6 @@ function AppShell() {
       } catch (error) {
         const message = errorMessage(error)
         setNotice({ message, error: true })
-        // Refresh versions before a retained draft can be submitted again.
         await invalidateKeys(ALL_QUERY_KEYS).catch(() => undefined)
         return { ok: false, message }
       }
@@ -215,7 +280,6 @@ function AppShell() {
           else if (resolved) setNotice(resolved)
         }
       } catch {
-        // The write committed; keep a refresh failure from causing a duplicate write.
         setNotice({ message: 'Saved, but refreshing the view failed. Please reopen this page.', error: true })
       }
       return { ok: true, data }
@@ -224,6 +288,15 @@ function AppShell() {
       setPendingKey(null)
     }
   }, [invalidateKeys])
+
+  const toggleThemeQuick = () => {
+    const nextMode = effectiveDark ? 'light' : 'dark'
+    void perform(
+      () => api.setThemeMode(nextMode),
+      nextMode === 'dark' ? 'Switched to Dark theme' : 'Switched to Light theme',
+      { key: 'settings:theme', invalidate: SETTINGS_KEYS },
+    )
+  }
 
   const startupError = ([projects.error, settings.error, weekly.error, monthly.error, trash.error] as unknown[]).find(isStartupError)
   if (startupError) {
@@ -237,16 +310,33 @@ function AppShell() {
 
   return <div className={`app-shell ${view === 'monthly' ? 'view-monthly' : ''}`}>
     <header className="topbar">
-      <div className="brand-block"><span className="brand-mark" aria-hidden="true"><BranchNodeIcon size={15} /></span><span className="brand-name">BranchTrace</span></div>
+      <div className="brand-block">
+        <span className="brand-mark" aria-hidden="true"><BranchNodeIcon size={15} /></span>
+        <span className="brand-name">BranchTrace</span>
+      </div>
       <nav className="main-nav" aria-label="Primary views">
-        <button type="button" data-focus-fallback className={`nav-item ${view === 'project' ? 'active' : ''}`} aria-current={view === 'project' ? 'page' : undefined} onClick={() => setView('project')}>Projects</button>
-        <button type="button" className={`nav-item ${view === 'weekly' ? 'active' : ''}`} aria-current={view === 'weekly' ? 'page' : undefined} onClick={openWeeklyView}>Weekly</button>
-        <button type="button" className={`nav-item ${view === 'monthly' ? 'active' : ''}`} aria-current={view === 'monthly' ? 'page' : undefined} onClick={openMonthlyView}>Monthly</button>
+        <button type="button" data-focus-fallback className={`nav-item ${view === 'project' ? 'active' : ''}`} aria-current={view === 'project' ? 'page' : undefined} onClick={() => setView('project')}>
+          <BranchNodeIcon size={15} /><span>Projects</span>
+        </button>
+        <button type="button" className={`nav-item ${view === 'weekly' ? 'active' : ''}`} aria-current={view === 'weekly' ? 'page' : undefined} onClick={openWeeklyView}>
+          <CalendarRangeIcon size={15} /><span>Weekly</span>
+        </button>
+        <button type="button" className={`nav-item ${view === 'monthly' ? 'active' : ''}`} aria-current={view === 'monthly' ? 'page' : undefined} onClick={openMonthlyView}>
+          <CalendarDaysIcon size={15} /><span>Monthly</span>
+        </button>
       </nav>
       <div className="top-actions">
         <time className="today-text" dateTime={today} title={`Today: ${today}`}>{formatFullDate(today)}</time>
         <span className="top-divider" aria-hidden="true" />
         <div className="utility-nav" role="group" aria-label="Utilities">
+          <button
+            type="button"
+            className="utility-button"
+            disabled={pendingKey === 'settings:theme'}
+            aria-label={effectiveDark ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={effectiveDark ? 'Switch to Light theme' : 'Switch to Dark theme'}
+            onClick={toggleThemeQuick}
+          >{effectiveDark ? <SunIcon size={16} /> : <MoonIcon size={16} />}</button>
           <button
             type="button"
             className={`utility-button ${view === 'trash' ? 'active' : ''}`}
@@ -280,50 +370,94 @@ function AppShell() {
       <button type="button" className="icon-button" onClick={() => setNotice(null)} aria-label="Dismiss notification"><CloseIcon size={14} /></button>
     </div>, document.body)}
 
-    <main className="main-content">
-      {view === 'project' && <>
-        {projects.isError && <LoadError error={projects.error} retry={() => void projects.refetch()} />}
-        <ProjectView projects={projectList} loading={projects.isLoading} pendingKey={pendingKey} today={today} focusCreateTick={focusCreateTick} onAction={perform} onOpenDetail={setSelectedProjectId} onOpenCalendar={setCalendarProjectId} />
-      </>}
-      {view === 'weekly' && <>
-        {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
-        {weekly.isError && <LoadError error={weekly.error} retry={() => void weekly.refetch()} />}
-        <WeeklyView
-          weekly={weekly.data}
-          weekStart={weekStart ?? clock.data?.weekStart ?? ''}
-          currentWeekStart={clock.data?.weekStart ?? ''}
-          focusedDate={focusedDate}
-          focusDayTick={focusDayTick}
-          onWeekChange={setWeekStart}
-          onFocusDateChange={setFocusedDate}
-          onOpenDetail={setSelectedProjectId}
-        />
-      </>}
-      {view === 'monthly' && <>
-        {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
-        {monthly.isError && <LoadError error={monthly.error} retry={() => void monthly.refetch()} />}
-        <MonthlyView
-          calendar={monthly.data}
-          month={month ?? currentMonth}
-          currentMonth={currentMonth}
-          today={today}
-          pendingKey={pendingKey}
-          onMonthChange={setMonth}
-          onSelectDay={openWeeklyForDate}
-          onAction={perform}
-        />
-      </>}
-      {view === 'trash' && <>
-        {trash.isError && <LoadError error={trash.error} retry={() => void trash.refetch()} />}
-        <TrashView kind={trashKind} entries={trash.data ?? []} loading={trash.isLoading} pendingKey={pendingKey} onKindChange={setTrashKind} onAction={perform} />
-      </>}
-      {view === 'settings' && <>
-        {settings.isError && <LoadError error={settings.error} retry={() => void settings.refetch()} />}
-        <SettingsView mode={settings.data?.themeMode ?? 'system'} pending={pendingKey === 'settings:theme' || settings.isLoading} onAction={perform} />
-      </>}
-    </main>
+    <div className="workspace-body">
+      <main className="main-content">
+        {view === 'project' && <>
+          {projects.isError && <LoadError error={projects.error} retry={() => void projects.refetch()} />}
+          <ProjectView
+            projects={projectList}
+            loading={projects.isLoading}
+            pendingKey={pendingKey}
+            today={today}
+            selectedProjectId={selectedProjectId}
+            detailPanelOpen={Boolean(selectedProjectId)}
+            focusCreateTick={focusCreateTick}
+            focusSearchTick={focusSearchTick}
+            addChildRequest={addChildRequest}
+            locateTarget={locateTarget}
+            onClearAddChildRequest={() => setAddChildRequest(null)}
+            onAction={perform}
+            onOpenDetail={setSelectedProjectId}
+            onOpenCalendar={setCalendarProjectId}
+          />
+        </>}
+        {view === 'weekly' && <>
+          {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
+          {weekly.isError && <LoadError error={weekly.error} retry={() => void weekly.refetch()} />}
+          <WeeklyView
+            weekly={weekly.data}
+            weekStart={weekStart ?? clock.data?.weekStart ?? ''}
+            currentWeekStart={clock.data?.weekStart ?? ''}
+            focusedDate={focusedDate}
+            focusDayTick={focusDayTick}
+            onWeekChange={setWeekStart}
+            onFocusDateChange={setFocusedDate}
+            onOpenDetail={setSelectedProjectId}
+            onOpenMonthlyDay={openMonthlyForDate}
+          />
+        </>}
+        {view === 'monthly' && <>
+          {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
+          {monthly.isError && <LoadError error={monthly.error} retry={() => void monthly.refetch()} />}
+          <MonthlyView
+            calendar={monthly.data}
+            month={month ?? currentMonth}
+            currentMonth={currentMonth}
+            today={today}
+            pendingKey={pendingKey}
+            focusCreateTick={focusMonthlyCreateTick}
+            selectedDateRequest={monthlyDateRequest}
+            onClearSelectedDateRequest={() => setMonthlyDateRequest(null)}
+            onMonthChange={setMonth}
+            onOpenWeeklyDay={openWeeklyForDate}
+            onOpenProjectDetail={setSelectedProjectId}
+            onAction={perform}
+          />
+        </>}
+        {view === 'trash' && <>
+          {trash.isError && <LoadError error={trash.error} retry={() => void trash.refetch()} />}
+          <TrashView kind={trashKind} entries={trash.data ?? []} loading={trash.isLoading} pendingKey={pendingKey} onKindChange={setTrashKind} onAction={perform} />
+        </>}
+        {view === 'settings' && <>
+          {settings.isError && <LoadError error={settings.error} retry={() => void settings.refetch()} />}
+          <SettingsView
+            mode={settings.data?.themeMode ?? 'system'}
+            density={density}
+            pending={pendingKey === 'settings:theme' || settings.isLoading}
+            onDensityChange={handleDensityChange}
+            onAction={perform}
+          />
+        </>}
+      </main>
 
-    {selectedProjectId && <ProjectDetailModal detail={detail.data} loading={detail.isLoading} error={detail.error} retry={() => void detail.refetch()} onClose={() => setSelectedProjectId(null)} />}
+      {selectedProjectId && <ProjectDetailPanel
+        detail={detail.data}
+        projects={projectList}
+        loading={detail.isLoading}
+        error={detail.error}
+        today={today}
+        pendingKey={pendingKey}
+        showLocateButton={view !== 'project'}
+        overlay={view === 'monthly'}
+        retry={() => void detail.refetch()}
+        onClose={() => setSelectedProjectId(null)}
+        onLocate={locateProject}
+        onOpenCalendar={setCalendarProjectId}
+        onStartAddChild={startAddChildFromPanel}
+        onAction={perform}
+      />}
+    </div>
+
     {calendarProject && <ProgressCalendarModal project={calendarProject} today={today} pending={pendingKey === `calendar:${calendarProject.id}`} onAction={perform} onClose={() => setCalendarProjectId(null)} />}
   </div>
 }

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createMoveTreeOptions } from '../project-options'
 import type { ProjectDto } from '../types'
-import { CheckIcon, FolderRootIcon, MinusIcon } from './icons'
-import { Modal, useDialogSubmit } from './ui'
+import { CheckIcon, FolderRootIcon } from './icons'
+import { Modal, StatusIcon, useDialogSubmit } from './ui'
 import type { ActionResult } from './ui'
 
 const MAX_PICKER_DEPTH = 8
@@ -88,10 +88,7 @@ export function MoveProjectDialog({
           >
             {option.value === ''
               ? <span className="move-root-icon" aria-hidden="true"><FolderRootIcon size={14} /></span>
-              : <span className={`status-dot small ${option.status ?? 'active'}`} aria-hidden="true">
-                {option.status === 'completed' && <CheckIcon size={8} strokeWidth={2.4} />}
-                {option.status === 'canceled' && <MinusIcon size={8} strokeWidth={2.4} />}
-              </span>}
+              : <StatusIcon status={option.status ?? 'active'} size="sm" />}
             <span className="move-option-title">{option.title}</span>
             {option.depth > MAX_PICKER_DEPTH && <span className="move-option-badge">Level {option.depth}</span>}
             {option.shortId && <span className="move-option-badge">{option.shortId}</span>}

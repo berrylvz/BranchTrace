@@ -4,6 +4,7 @@ import {
   computeCellReminderVisibility,
   computeMonthCellMetrics,
   computeOverdueStripLayout,
+  getCellRemindersForDisplayMode,
   getMonthWeekCount,
 } from '../src/monthly-layout.ts'
 
@@ -117,4 +118,46 @@ test('computeOverdueStripLayout fits single-row overdue items and switches to +N
   assert.deepEqual(computeOverdueStripLayout(6, 1190), { visibleCount: 4, hiddenCount: 2 })
   assert.deepEqual(computeOverdueStripLayout(3, 650), { visibleCount: 2, hiddenCount: 1 })
   assert.deepEqual(computeOverdueStripLayout(3, 180), { visibleCount: 0, hiddenCount: 3 })
+})
+
+test('getCellRemindersForDisplayMode filters Planned, Actual, and Both without duplicate reminder IDs', () => {
+  const day = {
+    plannedReminders: [
+      {
+        reminder: { id: 'r-active', title: 'Active', scheduledDate: '2026-11-24', status: 'active', completedDate: null, completedActionAt: null, canceledDate: null, sortOrder: 1024, version: 0 },
+        displayType: 'planned',
+        isPlannedAndCompletedSameDay: false,
+      },
+      {
+        reminder: { id: 'r-same-done', title: 'Done same day', scheduledDate: '2026-11-24', status: 'completed', completedDate: '2026-11-24', completedActionAt: '2026-11-24T10:00:00Z', canceledDate: null, sortOrder: 2048, version: 1 },
+        displayType: 'planned',
+        isPlannedAndCompletedSameDay: true,
+      },
+      {
+        reminder: { id: 'r-done-other', title: 'Done later', scheduledDate: '2026-11-24', status: 'completed', completedDate: '2026-11-26', completedActionAt: '2026-11-26T10:00:00Z', canceledDate: null, sortOrder: 3072, version: 1 },
+        displayType: 'planned',
+        isPlannedAndCompletedSameDay: false,
+      },
+    ],
+    crossDayCompletedReminders: [
+      {
+        reminder: { id: 'r-cross', title: 'Planned earlier', scheduledDate: '2026-11-20', status: 'completed', completedDate: '2026-11-24', completedActionAt: '2026-11-24T09:00:00Z', canceledDate: null, sortOrder: 1024, version: 1 },
+        displayType: 'completed',
+        isPlannedAndCompletedSameDay: false,
+      },
+    ],
+  }
+
+  assert.deepEqual(
+    getCellRemindersForDisplayMode(day, 'both').map((e) => e.item.reminder.id),
+    ['r-active', 'r-same-done', 'r-done-other', 'r-cross'],
+  )
+  assert.deepEqual(
+    getCellRemindersForDisplayMode(day, 'planned').map((e) => e.item.reminder.id),
+    ['r-active', 'r-same-done', 'r-done-other'],
+  )
+  assert.deepEqual(
+    getCellRemindersForDisplayMode(day, 'actual').map((e) => e.item.reminder.id),
+    ['r-same-done', 'r-cross'],
+  )
 })

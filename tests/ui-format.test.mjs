@@ -2,14 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   addDays,
+  daysBetween,
+  describeReminderCompletionTiming,
   formatFullDate,
   formatMonthDay,
   formatMonthLabel,
+  formatOverdueDuration,
   formatShortDate,
   formatTrashTimestamp,
   formatWeekdayShort,
   formatWeekRange,
   getMonthCalendarLayout,
+  getRecentWeekStarts,
   getWeekStart,
   groupProgressDatesByMonth,
   isWeekendDate,
@@ -83,4 +87,35 @@ test('date math helpers handle month, leap-year, and year boundaries', () => {
   const dec = getMonthCalendarLayout('2026-12')
   assert.equal(dec.leading, 1) // 2026-12-01 is Tuesday
   assert.equal(dec.dates.length, 31)
+})
+
+test('daysBetween, getRecentWeekStarts, completion timing, and overdue duration handle calendar boundaries', () => {
+  assert.equal(daysBetween('2026-11-20', '2026-11-23'), 3)
+  assert.equal(daysBetween('2026-11-25', '2026-11-23'), -2)
+  assert.equal(daysBetween('2024-02-28', '2024-03-01'), 2) // Leap year
+  assert.equal(daysBetween('2025-12-30', '2026-01-02'), 3) // Cross year
+
+  assert.deepEqual(getRecentWeekStarts('2026-11-24', 14), ['2026-11-09', '2026-11-16', '2026-11-23'])
+  assert.deepEqual(getRecentWeekStarts('2026-01-03', 14), ['2025-12-15', '2025-12-22', '2025-12-29'])
+  assert.equal(getRecentWeekStarts('2026-11-24', 30).length, 5)
+
+  assert.deepEqual(
+    describeReminderCompletionTiming({ status: 'completed', scheduledDate: '2026-11-23', completedDate: '2026-11-23' }),
+    { label: 'Completed on time', shortLabel: 'On time', tone: 'on-time', deltaDays: 0 },
+  )
+  assert.deepEqual(
+    describeReminderCompletionTiming({ status: 'completed', scheduledDate: '2026-11-25', completedDate: '2026-11-23' }),
+    { label: 'Completed 2 days early', shortLabel: '2d early', tone: 'early', deltaDays: -2 },
+  )
+  assert.deepEqual(
+    describeReminderCompletionTiming({ status: 'completed', scheduledDate: '2026-11-20', completedDate: '2026-11-23' }),
+    { label: 'Completed 3 days late', shortLabel: '3d late', tone: 'late', deltaDays: 3 },
+  )
+  assert.equal(
+    describeReminderCompletionTiming({ status: 'active', scheduledDate: '2026-11-23', completedDate: null }),
+    null,
+  )
+
+  assert.equal(formatOverdueDuration('2026-11-23', '2026-11-24'), '1 day overdue')
+  assert.equal(formatOverdueDuration('2026-11-20', '2026-11-24'), '4 days overdue')
 })
