@@ -768,14 +768,38 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 .day-empty { padding: 28px 6px; color: var(--muted); font-size: 12px; text-align: center; opacity: .75; }
 
 /* Monthly Calendar View */
-.monthly-toolbar { flex-wrap: wrap; gap: 14px; }
-.monthly-title-group { flex-wrap: wrap; }
+.app-shell.view-monthly {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+.app-shell.view-monthly .main-content {
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 24px 16px;
+}
+.monthly-view {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  gap: 12px;
+}
+.monthly-toolbar {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.monthly-title-group {
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
 .monthly-create-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  width: min(500px, 100%);
+  flex: 1 1 320px;
+  max-width: 480px;
 }
 .monthly-create-input, .monthly-create-date {
   height: 34px;
@@ -787,7 +811,7 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
   transition: border-color var(--ease-fast), box-shadow var(--ease-fast);
 }
 .monthly-create-input {
-  flex: 1 1 200px;
+  flex: 1 1 130px;
   min-width: 0;
   padding: 6px 11px;
 }
@@ -803,52 +827,129 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 }
 
 .monthly-overdue-card {
-  padding: 12px 14px;
+  flex-shrink: 0;
+  padding: 6px 10px;
   border-color: var(--ember);
   background: var(--ember-soft);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.monthly-overdue-header {
-  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
-.monthly-overdue-header h2 {
+.monthly-overdue-trigger {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ember);
+  transition: background-color var(--ease-fast);
+}
+.monthly-overdue-trigger:hover {
+  background: rgb(154 97 42 / .12);
+}
+:root.dark .monthly-overdue-trigger:hover {
+  background: rgb(227 178 119 / .12);
+}
+.monthly-overdue-title {
   font-size: 12.5px;
   font-weight: 650;
-  color: var(--ember);
+  white-space: nowrap;
 }
 .overdue-count {
   background: var(--surface);
   color: var(--ember);
 }
-.monthly-overdue-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+.monthly-overdue-strip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: 6px;
+  overflow: hidden;
+}
+.overdue-more-btn {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--ember);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+.overdue-more-btn.solo {
+  margin-left: auto;
+}
+.overdue-more-btn:hover:not(:disabled) {
+  background: var(--ember);
+  color: var(--surface);
 }
 .month-reminder-row.in-overdue-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 360px;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
   background: var(--surface);
   border: 1px solid var(--line);
-  padding: 5px 7px;
+  padding: 3px 5px 3px 7px;
 }
 .month-reminder-row.in-overdue-bar:hover, .month-reminder-row.in-overdue-bar:focus-within {
   border-color: var(--line-strong);
   background: var(--surface);
 }
+.month-reminder-row.in-overdue-bar .month-reminder-check {
+  margin-top: 0;
+}
+.month-reminder-row.in-overdue-bar .month-reminder-content {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.month-reminder-row.in-overdue-bar .month-reminder-title {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.month-reminder-row.in-overdue-bar .month-reminder-meta {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+.month-reminder-row.in-overdue-bar .inline-rename-form {
+  padding: 0;
+}
+.month-reminder-row.in-overdue-bar .inline-edit-input.compact {
+  height: 22px;
+  font-size: 12px;
+}
 .overdue-date-link {
   width: fit-content;
-  margin-top: 1px;
-  padding: 0 5px;
+  padding: 1px 5px;
   border: 0;
   border-radius: 4px;
   background: var(--ember-soft);
   color: var(--ember);
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.35;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   transition: background-color var(--ease-fast), color var(--ease-fast);
 }
 .overdue-date-link:hover {
@@ -858,46 +959,70 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 
 .month-calendar-card {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-width: 0;
 }
-.month-calendar-scroll {
+.month-calendar-card .loading-state {
+  margin: auto;
+}
+.month-calendar-body {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow-x: auto;
-  min-width: 0;
+  overflow: hidden;
 }
 .month-weekdays {
+  flex-shrink: 0;
   display: grid;
-  grid-template-columns: repeat(7, minmax(136px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
   background: var(--surface-subtle);
   user-select: none;
 }
 .month-weekdays span {
-  padding: 9px 10px;
+  min-width: 0;
+  padding: 7px 10px;
   color: var(--muted);
   font-size: 11.5px;
   font-weight: 600;
   letter-spacing: .03em;
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .month-weekdays span.weekend { opacity: .8; }
 .month-grid {
+  --month-rows: 5;
+  --cell-pad-y: 6px;
+  --cell-pad-x: 6px;
+  --cell-gap: 4px;
+  --cell-header-h: 22px;
+  --cell-stats-h: 18px;
+  --cell-item-h: 22px;
+  --cell-item-gap: 3px;
+  --cell-more-h: 18px;
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(7, minmax(136px, 1fr));
-  grid-auto-rows: minmax(126px, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(var(--month-rows), minmax(0, 1fr));
+  overflow: hidden;
 }
 .month-cell {
   min-width: 0;
-  padding: 6px;
+  min-height: 0;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--cell-gap);
+  overflow: hidden;
   border-right: 1px solid var(--line-subtle);
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface);
@@ -905,6 +1030,7 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
   transition: background-color var(--ease-fast), box-shadow var(--ease-fast);
 }
 .month-cell:nth-child(7n) { border-right: 0; }
+.month-cell.last-row { border-bottom: 0; }
 .month-cell.weekend { background: var(--surface-subtle); }
 .month-cell.outside-month { background: var(--bg); }
 .month-cell.outside-month .month-day-number { color: var(--muted); opacity: .72; }
@@ -916,26 +1042,44 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 .month-cell.today:hover { background: var(--surface-subtle); }
 
 .month-cell-header {
+  height: var(--cell-header-h);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 4px;
-  min-height: 24px;
+  min-width: 0;
+}
+.month-cell-header-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 .month-day-open {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
+  gap: 4px;
+  height: var(--cell-header-h);
+  padding: 0 5px;
   margin-left: -4px;
+  flex: 0 0 auto;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   transition: color var(--ease-fast), background-color var(--ease-fast);
+}
+.month-grid.density-compact .month-day-open {
+  font-size: 12px;
+  padding: 0 4px;
+  margin-left: -3px;
 }
 .month-day-open:hover {
   color: var(--branch);
@@ -943,27 +1087,43 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 }
 .month-cell.today .month-day-number { color: var(--branch); font-weight: 700; }
 .month-today-pill {
-  padding: 0 5px;
+  padding: 1px 5px;
   border-radius: 999px;
   background: var(--branch-soft);
   color: var(--branch);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 650;
-  line-height: 1.5;
+  line-height: 1.25;
 }
 .month-details-btn {
-  height: 22px;
-  padding: 0 7px;
+  height: 20px;
+  padding: 0 6px;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
   line-height: 1;
   opacity: .76;
   transition: opacity var(--ease-fast), color var(--ease-fast), background-color var(--ease-fast), border-color var(--ease-fast);
+}
+.month-details-btn.icon-only {
+  width: 20px;
+  padding: 0;
+}
+.month-grid.density-compact .month-details-btn {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+.month-grid.density-compact .month-details-btn.icon-only {
+  width: 18px;
+  padding: 0;
 }
 .month-cell:hover .month-details-btn, .month-cell:focus-within .month-details-btn {
   opacity: 1;
@@ -975,32 +1135,73 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
   background: var(--branch-soft);
 }
 .month-project-stats {
+  height: var(--cell-stats-h);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+.month-project-stats.inline {
+  height: auto;
+  flex-shrink: 1;
 }
 .month-stat {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 1px 5px;
+  flex: 0 0 auto;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.4;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 .month-stat.completed { color: var(--branch); background: var(--branch-soft); }
 .month-stat.progressed { color: var(--ember); background: var(--ember-soft); }
+.month-stat.reminders { color: var(--muted); background: var(--surface-soft); }
+.month-grid.density-compact .month-project-stats { gap: 2px; }
+.month-grid.density-compact .month-stat { padding: 1px 3.5px; font-size: 9.5px; }
 
 .month-cell-reminders {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  overflow-y: auto;
-  max-height: 180px;
+  gap: var(--cell-item-gap);
+  overflow: hidden;
+}
+.month-more-btn {
+  height: var(--cell-more-h);
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--branch);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color var(--ease-fast), color var(--ease-fast);
+}
+.month-grid.density-compact .month-more-btn {
+  font-size: 10.5px;
+  padding: 0 4px;
+}
+.month-more-btn:hover {
+  background: var(--branch-soft);
 }
 .month-reminder-row {
   position: relative;
@@ -1013,7 +1214,42 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
   border: 1px solid transparent;
   transition: background-color var(--ease-fast), border-color var(--ease-fast), opacity var(--ease-fast);
 }
-.month-reminder-row.preview { cursor: pointer; }
+.month-reminder-row.preview {
+  height: var(--cell-item-h);
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0 5px;
+  border-radius: 5px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.month-reminder-row.preview .month-reminder-check {
+  width: 13px;
+  height: 13px;
+  margin-top: 0;
+  border-radius: 3px;
+}
+.month-reminder-row.preview .month-reminder-title {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  line-height: 1.2;
+}
+.month-grid.density-compact .month-reminder-row.preview .month-reminder-title {
+  font-size: 11px;
+}
+.month-reminder-row.preview .month-reminder-hint {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
 .month-reminder-row.in-modal {
   padding: 7px 8px;
   border-color: var(--line-subtle);
@@ -1112,6 +1348,11 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
   height: 24px;
   margin-top: -2px;
 }
+.month-reminder-row.in-overdue-bar .more-button {
+  width: 22px;
+  height: 22px;
+  margin-top: 0;
+}
 .reminder-delete-btn:hover:not(:disabled) {
   color: var(--danger);
   background: var(--danger-soft);
@@ -1124,7 +1365,7 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em
 .month-reminder-row.in-modal:hover .modal-drag-handle,
 .month-reminder-row.in-modal:focus-within .modal-drag-handle { opacity: 1; }
 .month-reminder-row.in-overdue-bar .more-button {
-  opacity: 0;
+  opacity: .5;
   transition: opacity var(--ease-fast), color var(--ease-fast), background-color var(--ease-fast);
 }
 .month-reminder-row.in-overdue-bar:hover .more-button,
@@ -1670,6 +1911,26 @@ select.form-input { text-overflow: ellipsis; }
   .add-child-button, .progress-history-button.empty, .month-details-btn, .month-reminder-row.in-overdue-bar .more-button { opacity: 1; }
 }
 
+@media (max-height: 760px) {
+  .app-shell.view-monthly .main-content { padding-block: 12px; }
+  .monthly-view { gap: 10px; }
+  .monthly-toolbar { min-height: 36px; }
+  .monthly-overdue-card { padding-block: 5px; }
+  .month-weekdays span { padding: 6px 8px; }
+}
+
+@media (max-height: 660px) {
+  .app-shell.view-monthly .main-content { padding-block: 10px; }
+  .monthly-view { gap: 8px; }
+  .monthly-toolbar { min-height: 34px; }
+  .monthly-toolbar h1 { font-size: 20px; }
+  .monthly-create-input, .monthly-create-date, .monthly-create-bar .primary-button {
+    height: 32px;
+    min-height: 32px;
+  }
+  .month-weekdays span { padding: 5px 8px; font-size: 11px; }
+}
+
 @media (max-width: 700px) {
   .topbar { padding: 0 14px; gap: 12px; }
   .brand-name { display: none; }
@@ -1678,11 +1939,19 @@ select.form-input { text-overflow: ellipsis; }
   .top-actions { gap: 8px; }
   .top-divider { display: none; }
   .main-content { padding: 18px 14px 32px; }
-  .page-toolbar { flex-wrap: wrap; gap: 12px; }
-  .create-bar, .monthly-create-bar { width: 100%; flex-wrap: wrap; }
+  .app-shell.view-monthly .main-content { padding-inline: 14px; }
+  .page-toolbar { flex-wrap: wrap; gap: 10px 12px; }
+  .monthly-title-group { flex-wrap: wrap; }
+  .create-bar { width: 100%; flex-wrap: wrap; }
+  .monthly-create-bar { width: 100%; max-width: none; flex: 1 1 100%; }
+  .monthly-overdue-card { gap: 8px; padding-inline: 8px; }
   .progress-history-button, .terminal-date-badge { display: none; }
   .project-row { gap: 5px; }
   .theme-grid { grid-template-columns: 1fr; }
   .trash-row { padding: 12px; flex-wrap: wrap; gap: 10px; }
   .trash-actions { margin-left: auto; }
+}
+
+@media (max-width: 480px) {
+  .monthly-create-bar { flex-wrap: wrap; }
 }

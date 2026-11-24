@@ -235,7 +235,7 @@ function AppShell() {
   const currentMonth = today.slice(0, 7)
   const calendarProject = projectList.find((project) => project.id === calendarProjectId)
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${view === 'monthly' ? 'view-monthly' : ''}`}>
     <header className="topbar">
       <div className="brand-block"><span className="brand-mark" aria-hidden="true"><BranchNodeIcon size={15} /></span><span className="brand-name">BranchTrace</span></div>
       <nav className="main-nav" aria-label="Primary views">
