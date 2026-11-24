@@ -1,6 +1,7 @@
 import { createApiError } from '../api-error.ts'
 import type { ProjectDto, ReminderDto, ThemeMode, TrashEntryDto } from '../types'
 import { todayIsoDate } from '../ui-format.ts'
+import { createDemoMockState } from './demo.ts'
 
 export interface MockState {
   projects: ProjectDto[]
@@ -24,13 +25,7 @@ export type MockCommandHandler = (
   args: Record<string, unknown>,
 ) => unknown
 
-const mockDefault = (): MockState => ({
-  projects: [],
-  progress: {},
-  reminders: [],
-  trash: [],
-  themeMode: 'system',
-})
+const mockDefault = (): MockState => createDemoMockState()
 
 export function createMockStore(): MockStore {
   let cached: MockState | null = null

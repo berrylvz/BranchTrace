@@ -1,3 +1,4 @@
+use super::demo::{create_demo_database_file, populate_demo_data};
 use super::projects::{
     create_project, get_project_detail, get_project_progress_month, get_project_tree,
     get_project_tree_on, rename_project, reorder_project_siblings, restore_project,
@@ -898,6 +899,236 @@ fn project_progress_month_and_list_trash_return_targeted_results() {
     let entries = list_trash(&connection, "project").unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].current_descendant_count, Some(2));
+}
+
+#[test]
+fn demo_seed_populates_all_showcase_features_across_anchor_dates() {
+    let anchors = [
+        NaiveDate::from_ymd_opt(2026, 11, 23).unwrap(), // Monday
+        NaiveDate::from_ymd_opt(2026, 11, 29).unwrap(), // Sunday
+        NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),   // Cross-year boundary
+        NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),   // Non-leap Feb boundary
+        NaiveDate::from_ymd_opt(2028, 3, 1).unwrap(),   // Leap year Feb boundary
+    ];
+
+    for anchor in anchors {
+        let mut connection = test_connection();
+        let summary = populate_demo_data(&mut connection, anchor).unwrap();
+        assert_eq!(summary.anchor_today, date_string(anchor));
+        assert_eq!(summary.visible_project_count, 26);
+        assert_eq!(summary.trashed_project_count, 6);
+        assert_eq!(summary.visible_reminder_count, 18);
+        assert_eq!(summary.trashed_reminder_count, 3);
+        assert_eq!(summary.project_trash_entry_count, 4);
+        assert_eq!(summary.reminder_trash_entry_count, 3);
+
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+
+        let tree = get_project_tree_on(&connection, anchor).unwrap();
+        assert_eq!(tree.len(), 26);
+        assert!(tree.iter().any(|p| p.status == ItemStatus::Active));
+        assert!(tree.iter().any(|p| p.status == ItemStatus::Completed));
+        assert!(tree.iter().any(|p| p.status == ItemStatus::Canceled));
+        assert!(tree.iter().any(|p| !p.is_expanded));
+        assert!(tree.iter().any(|p| p.progressed_today));
+        assert!(tree
+            .iter()
+            .any(|p| p.status == ItemStatus::Active && !p.progressed_today));
+        assert!(tree.iter().any(|p| p.progress_count > 3));
+
+        // Parent-child status independence: active children under both completed and canceled parents.
+        let by_id: std::collections::HashMap<&str, _> =
+            tree.iter().map(|p| (p.id.as_str(), p)).collect();
+        assert!(tree.iter().any(|child| {
+            child.status == ItemStatus::Active
+                && child
+                    .parent_id
+                    .as_deref()
+                    .and_then(|pid| by_id.get(pid))
+                    .is_some_and(|parent| parent.status == ItemStatus::Completed)
+        }));
+        assert!(tree.iter().any(|child| {
+            child.status == ItemStatus::Active
+                && child
+                    .parent_id
+                    .as_deref()
+                    .and_then(|pid| by_id.get(pid))
+                    .is_some_and(|parent| parent.status == ItemStatus::Canceled)
+        }));
+
+        // Weekly view on current week must highlight same-day completed+progressed,
+        // duplicate-path short IDs, overdue reminders, and both late & early cross-day completions.
+        let week_start =
+            date_string(anchor - Duration::days(anchor.weekday().num_days_from_monday() as i64));
+        let week = get_daily_week_on(&connection, &week_start, anchor).unwrap();
+        let today_str = date_string(anchor);
+        let today_col = week.days.iter().find(|d| d.date == today_str).unwrap();
+
+        assert!(today_col
+            .completed_projects
+            .iter()
+            .any(|item| item.progressed_same_day == Some(true)));
+        assert!(today_col
+            .completed_projects
+            .iter()
+            .any(|item| item.progressed_same_day == Some(false)));
+
+        let checklist_done = today_col
+            .completed_projects
+            .iter()
+            .find(|item| item.title == "Release Checklist")
+            .unwrap();
+        let checklist_prog = today_col
+            .progressed_projects
+            .iter()
+            .find(|item| item.title == "Release Checklist")
+            .unwrap();
+        assert_eq!(checklist_done.short_id.as_deref(), Some("a4c1f"));
+        assert_eq!(checklist_prog.short_id.as_deref(), Some("a4c1e"));
+
+        assert_eq!(today_col.planned_reminders.len(), 3);
+        assert!(today_col
+            .planned_reminders
+            .iter()
+            .any(|r| r.is_planned_and_completed_same_day));
+        assert!(today_col
+            .planned_reminders
+            .iter()
+            .any(|r| r.reminder.status == ItemStatus::Canceled));
+        assert_eq!(today_col.overdue_reminders.len(), 3);
+        assert_eq!(today_col.cross_day_completed_reminders.len(), 2);
+        assert_eq!(
+            today_col.cross_day_completed_reminders[0].reminder.title,
+            "Send architecture review notes"
+        );
+        assert_eq!(
+            today_col.cross_day_completed_reminders[1].reminder.title,
+            "Prepare sprint retrospective slides"
+        );
+        assert!(
+            today_col.cross_day_completed_reminders[1]
+                .reminder
+                .completed_date
+                .as_deref()
+                .unwrap()
+                < today_col.cross_day_completed_reminders[1]
+                    .reminder
+                    .scheduled_date
+                    .as_str()
+        );
+
+        // Monthly view must expose cross-month overdue reminders and deduplicated project counts.
+        let current_month = today_str[..7].to_string();
+        let month = get_month_calendar_on(&connection, &current_month, anchor).unwrap();
+        assert_eq!(month.overdue_reminders.len(), 3);
+        assert_eq!(
+            month.overdue_reminders[0].reminder.title,
+            "Renew annual SSL certificate"
+        );
+        let today_cell = month.days.iter().find(|d| d.date == today_str).unwrap();
+        assert_eq!(today_cell.completed_project_count, 2);
+        assert!(today_cell.progressed_project_count >= 5);
+
+        // Nested project trash isolation & overdue reminder restore.
+        let project_trash = list_trash(&connection, "project").unwrap();
+        assert_eq!(project_trash.len(), 4);
+        let parent_entry = project_trash
+            .iter()
+            .find(|e| e.title_snapshot == "Old Mobile Companion Idea")
+            .unwrap();
+        let child_entry = project_trash
+            .iter()
+            .find(|e| e.title_snapshot == "Push Notification Spike")
+            .unwrap();
+        assert_eq!(parent_entry.affected_count_at_delete, 2);
+        assert_eq!(parent_entry.current_descendant_count, Some(3));
+        assert_eq!(child_entry.affected_count_at_delete, 1);
+        assert_eq!(child_entry.current_descendant_count, Some(1));
+
+        assert_eq!(
+            restore_trash_entry(&mut connection, &child_entry.id)
+                .unwrap_err()
+                .code,
+            ErrorCode::ParentInTrash
+        );
+        let restored_parent = restore_trash_entry(&mut connection, &parent_entry.id).unwrap();
+        assert_eq!(restored_parent.restored_count, 2);
+        let remaining_trash = list_trash(&connection, "project").unwrap();
+        assert!(remaining_trash.iter().any(|e| e.id == child_entry.id));
+
+        let reminder_trash = list_trash(&connection, "reminder").unwrap();
+        assert_eq!(reminder_trash.len(), 3);
+        let overdue_trashed = reminder_trash
+            .iter()
+            .find(|e| e.title_snapshot == "Confirm venue deposit")
+            .unwrap();
+        restore_trash_entry(&mut connection, &overdue_trashed.id).unwrap();
+        let updated_month = get_month_calendar_on(&connection, &current_month, anchor).unwrap();
+        assert_eq!(updated_month.overdue_reminders.len(), 4);
+    }
+}
+
+#[test]
+fn demo_seed_refuses_non_empty_db_and_overwrite_without_force() {
+    let mut connection = test_connection();
+    create_project(&mut connection, "Existing User Project", None).unwrap();
+    let anchor = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+    assert_eq!(
+        populate_demo_data(&mut connection, anchor)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!("branchtrace-demo-guard-{}", Uuid::new_v4()));
+    let db_path = temp_dir.join("demo.sqlite3");
+    create_demo_database_file(&db_path, anchor, false).unwrap();
+    assert_eq!(
+        create_demo_database_file(&db_path, anchor, false)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+    create_demo_database_file(&db_path, anchor, true).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn create_demo_database_file_produces_standalone_loadable_db() {
+    let temp_dir = std::env::temp_dir().join(format!("branchtrace-demo-file-{}", Uuid::new_v4()));
+    let db_path = temp_dir.join("branchtrace-demo.sqlite3");
+    let anchor = local_today();
+
+    let summary = create_demo_database_file(&db_path, anchor, false).unwrap();
+    assert_eq!(summary.visible_project_count, 26);
+    assert!(db_path.exists());
+    assert!(!temp_dir.join("branchtrace-demo.sqlite3-wal").exists());
+    assert!(!temp_dir.join("branchtrace-demo.sqlite3-shm").exists());
+
+    // Open through the exact same DbHandle worker the desktop application uses.
+    let handle = DbHandle::start(db_path.clone()).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let projects = handle.call(|conn| get_project_tree(conn)).await.unwrap();
+        assert_eq!(projects.len(), 26);
+        let week_start = clock_context().week_start;
+        let week = handle
+            .call(move |conn| get_daily_week(conn, &week_start))
+            .await
+            .unwrap();
+        assert_eq!(week.days.len(), 7);
+        let settings = handle.call(|conn| get_app_settings(conn)).await.unwrap();
+        assert_eq!(settings.theme_mode, ThemeMode::System);
+    });
+    handle.shutdown();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 fn test_connection() -> Connection {

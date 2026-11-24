@@ -1,3 +1,4 @@
+pub(crate) mod demo;
 pub(crate) mod projects;
 pub(crate) mod reminders;
 mod repo;
@@ -11,5 +12,6 @@ mod worker;
 #[cfg(test)]
 mod tests;
 
+pub use demo::{create_demo_database_file, DemoSeedSummary};
 pub use support::clock_context;
 pub use worker::DbHandle;

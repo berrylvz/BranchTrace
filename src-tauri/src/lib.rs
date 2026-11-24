@@ -4,12 +4,14 @@ mod db;
 mod models;
 
 use db::{clock_context, DbHandle};
+pub use db::{create_demo_database_file, DemoSeedSummary};
+pub use models::{ApiError, ErrorCode};
 use models::{
-    ApiError, ClockContext, DailyWeekDto, DeleteResult, ErrorCode, MonthCalendarDto, PreviewResult,
-    ProjectDetailDto, ProjectDto, ReminderDto, RestoreResult, TerminalStatus, ThemeSettings,
-    TrashEntryDto,
+    ClockContext, DailyWeekDto, DeleteResult, MonthCalendarDto, PreviewResult, ProjectDetailDto,
+    ProjectDto, ReminderDto, RestoreResult, TerminalStatus, ThemeSettings, TrashEntryDto,
 };
 use rusqlite::Connection;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -452,27 +454,76 @@ fn startup_error(mut error: ApiError, db_path: Option<&PathBuf>) -> ApiError {
     error
 }
 
+const DB_PATH_ENV: &str = "BRANCHTRACE_DB_PATH";
+
+fn resolve_db_path_from(
+    override_path: Option<OsString>,
+    default_dir: impl FnOnce() -> Result<PathBuf, ApiError>,
+) -> Result<PathBuf, ApiError> {
+    if let Some(raw) = override_path {
+        if !raw.to_string_lossy().trim().is_empty() {
+            return Ok(PathBuf::from(raw));
+        }
+    }
+    Ok(default_dir()?.join("branchtrace.sqlite3"))
+}
+
 fn initialize_db(app: &tauri::App) -> Result<DbHandle, ApiError> {
-    let data_dir: PathBuf = app.path().app_data_dir().map_err(|error| {
-        startup_error(
-            ApiError::new(
-                ErrorCode::DbError,
-                format!("Unable to resolve application data directory: {error}"),
-            ),
-            None,
-        )
+    let db_path = resolve_db_path_from(std::env::var_os(DB_PATH_ENV), || {
+        app.path().app_data_dir().map_err(|error| {
+            startup_error(
+                ApiError::new(
+                    ErrorCode::DbError,
+                    format!("Unable to resolve application data directory: {error}"),
+                ),
+                None,
+            )
+        })
     })?;
-    let db_path = data_dir.join("branchtrace.sqlite3");
-    if let Err(error) = std::fs::create_dir_all(&data_dir) {
-        return Err(startup_error(
-            ApiError::new(
-                ErrorCode::DbError,
-                format!("Unable to create application data directory: {error}"),
-            ),
-            Some(&db_path),
-        ));
+    if let Some(parent) = db_path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            return Err(startup_error(
+                ApiError::new(
+                    ErrorCode::DbError,
+                    format!("Unable to create database directory: {error}"),
+                ),
+                Some(&db_path),
+            ));
+        }
     }
     DbHandle::start(db_path.clone()).map_err(|error| startup_error(error, Some(&db_path)))
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use super::resolve_db_path_from;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolve_db_path_prefers_non_empty_override() {
+        let custom = resolve_db_path_from(Some(OsString::from("/tmp/custom-demo.sqlite3")), || {
+            Ok(PathBuf::from("/default/app-data"))
+        })
+        .unwrap();
+        assert_eq!(custom, PathBuf::from("/tmp/custom-demo.sqlite3"));
+
+        let fallback_none =
+            resolve_db_path_from(None, || Ok(PathBuf::from("/default/app-data"))).unwrap();
+        assert_eq!(
+            fallback_none,
+            PathBuf::from("/default/app-data/branchtrace.sqlite3")
+        );
+
+        let fallback_blank = resolve_db_path_from(Some(OsString::from("   ")), || {
+            Ok(PathBuf::from("/default/app-data"))
+        })
+        .unwrap();
+        assert_eq!(
+            fallback_blank,
+            PathBuf::from("/default/app-data/branchtrace.sqlite3")
+        );
+    }
 }
 
 pub fn run() {

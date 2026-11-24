@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "枝迹 · BranchTrace"
 authors = ["BranchTrace"]
 edition = "2021"
+default-run = "branchtrace"
 
 [lib]
 name = "branchtrace_lib"

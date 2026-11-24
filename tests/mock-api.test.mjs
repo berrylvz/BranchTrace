@@ -235,3 +235,46 @@ test('invalid trash category and theme mode return INVALID_INPUT', async () => {
     (error) => error.code === 'INVALID_INPUT',
   )
 })
+
+test('default browser mock initializes with complete showcase demo dataset', async () => {
+  let saved = null
+  globalThis.localStorage = {
+    getItem: () => saved,
+    setItem: (_key, value) => { saved = value },
+  }
+  const { api } = await import(`../src/api.ts?mock-demo-test=${moduleId++}`)
+  const { today, weekStart } = await api.getClockContext()
+
+  const projects = await api.getProjectTree()
+  assert.equal(projects.length, 26)
+  assert.ok(projects.some((p) => !p.isExpanded))
+  assert.ok(projects.some((p) => p.progressCount > 3))
+  assert.ok(projects.some((p) => p.status === 'canceled'))
+
+  const week = await api.getDailyWeek(weekStart)
+  const todayCol = week.days.find((day) => day.date === today)
+  assert.ok(todayCol)
+  assert.ok(todayCol.completedProjects.some((item) => item.progressedSameDay === true))
+  assert.ok(todayCol.completedProjects.some((item) => item.shortId === 'a4c1f'))
+  assert.ok(todayCol.progressedProjects.some((item) => item.shortId === 'a4c1e'))
+  assert.equal(todayCol.overdueReminders.length, 3)
+  assert.equal(todayCol.crossDayCompletedReminders.length, 2)
+
+  const month = await api.getMonthCalendar(today.slice(0, 7))
+  assert.equal(month.overdueReminders.length, 3)
+  assert.equal(month.overdueReminders[0].reminder.title, 'Renew annual SSL certificate')
+
+  const projectTrash = await api.listTrash('project')
+  assert.equal(projectTrash.length, 4)
+  const nestedParent = projectTrash.find((e) => e.titleSnapshot === 'Old Mobile Companion Idea')
+  const nestedChild = projectTrash.find((e) => e.titleSnapshot === 'Push Notification Spike')
+  assert.equal(nestedParent.affectedCountAtDelete, 2)
+  assert.equal(nestedParent.currentDescendantCount, 3)
+  await assert.rejects(
+    api.restoreTrashEntry(nestedChild.id),
+    (error) => error.code === 'PARENT_IN_TRASH',
+  )
+  const restored = await api.restoreTrashEntry(nestedParent.id)
+  assert.equal(restored.restoredCount, 2)
+  assert.ok((await api.listTrash('project')).some((e) => e.id === nestedChild.id))
+})

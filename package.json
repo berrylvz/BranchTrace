@@ -7,7 +7,8 @@
     "dev": "vite --port 1420",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "db:demo": "cargo run --manifest-path src-tauri/Cargo.toml --bin seed_demo -- --output demo/branchtrace-demo.sqlite3 --force"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
