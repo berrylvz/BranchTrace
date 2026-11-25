@@ -123,6 +123,7 @@
 }
 
 .utility-button {
+  position: relative;
   width: 32px;
   height: 32px;
   padding: 0;
@@ -133,6 +134,17 @@
   color: var(--color-text-secondary);
   background: transparent;
   transition: color var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.utility-badge-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-completed-accent);
+  box-shadow: 0 0 0 2px var(--color-surface);
 }
 
 .utility-button:hover:not(:disabled) {

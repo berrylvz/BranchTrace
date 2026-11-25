@@ -9,6 +9,7 @@ dist/
 target/
 src-tauri/target/
 src-tauri/gen/
+release-assets/
 
 # Local databases and logs
 *.sqlite3

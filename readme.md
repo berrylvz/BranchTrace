@@ -45,10 +45,46 @@ BRANCHTRACE_DB_PATH="$PWD/demo/branchtrace-demo.sqlite3" pnpm tauri dev
 ```bash
 pnpm build
 pnpm tauri dev
-pnpm tauri build
+pnpm tauri build --bundles deb
 ```
 
 Linux 构建需要 Tauri 2 的系统依赖，包括 WebKitGTK、GTK 3 和 librsvg；Windows 与 macOS 请按 Tauri 2 官方前置依赖安装 Rust 和平台工具链。
+
+## 本地 `.deb` 安装与自动更新（`dpkg` + GitHub Releases）
+
+项目已接入 `tauri-plugin-updater`（支持 Linux `.deb` 原生升级，使用 `pkexec dpkg -i` 提权安装）和 GitHub Actions 自动发布流水线（`.github/workflows/release.yml`）。
+
+### 1. 一次性配置 GitHub Actions 签名密钥
+
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中新增：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：本机 `~/.tauri/branchtrace.key` 文件的完整内容（切勿提交私钥到 Git）。
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成私钥时设置的密码（如为无密码密钥可留空或不设置）。
+
+对应的公钥已写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`，并开启 `requireSignedVersion: true` 防止降级重放。
+
+### 2. 发布新版本（自动构建 `.deb` 并生成 `latest.json`）
+
+```bash
+# 同步更新 package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml 三处版本号
+pnpm release:bump 1.0.1
+
+# 更新 Cargo.lock（如需要）并提交打 tag 推送
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "chore(release): v1.0.1"
+git tag -a v1.0.1 -m "Release v1.0.1"
+git push origin main v1.0.1
+```
+
+推送 `v*` 标签后，`.github/workflows/release.yml` 会自动执行全量测试、构建带签名的 `.deb` 安装包、生成包含 `linux-x86_64-deb` 目标的 `latest.json` 与 `.deb.sha256`，并上传到 GitHub Releases。
+
+### 3. 本地首次安装与后续应用内更新
+
+- **首次安装**：从 GitHub Releases 下载最新 `BranchTrace_<version>_amd64.deb`（或在本地通过 `TAURI_SIGNING_PRIVATE_KEY=~/.tauri/branchtrace.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm tauri build --ci --bundles deb` 构建）后执行：
+  ```bash
+  sudo apt install ./BranchTrace_<version>_amd64.deb
+  ```
+- **后续自动更新**：打开已安装的 BranchTrace，应用会在启动后静默检查一次更新，也可以在 **Settings → Software Updates** 手动点击 **Check for Updates** → **Download & Install**，通过系统认证弹窗由 `dpkg` 完成升级，再点击 **Restart Now**（重启前会自动排空并关闭 SQLite 工作线程，保留 `~/.local/share/com.branchtrace.app/branchtrace.sqlite3` 中的本地数据）。
 
 ## 后端结构
 

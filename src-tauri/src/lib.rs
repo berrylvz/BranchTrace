@@ -441,6 +441,22 @@ async fn set_theme_mode(
     .await
 }
 
+#[tauri::command]
+fn relaunch_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    if state.closing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    std::thread::spawn(move || {
+        if let Some(app_state) = app.try_state::<AppState>() {
+            app_state.shutdown();
+        }
+        app.restart();
+    });
+}
+
 fn startup_error(mut error: ApiError, db_path: Option<&PathBuf>) -> ApiError {
     let mut details = serde_json::Map::new();
     details.insert("startupError".to_string(), serde_json::Value::Bool(true));
@@ -527,7 +543,13 @@ mod lib_tests {
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    let app = builder
         .setup(|app| {
             let db = initialize_db(app);
             app.manage(AppState {
@@ -591,7 +613,8 @@ pub fn run() {
             permanently_delete_trash_entry,
             empty_trash,
             get_app_settings,
-            set_theme_mode
+            set_theme_mode,
+            relaunch_app
         ])
         .build(tauri::generate_context!())
         .expect("Failed to start BranchTrace");

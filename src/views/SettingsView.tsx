@@ -1,9 +1,21 @@
 import { api } from '../api'
-import { BranchNodeIcon, CheckIcon, KeyboardIcon, MonitorIcon, MoonIcon, SlidersIcon, SunIcon } from '../components/icons'
+import {
+  BranchNodeIcon,
+  CheckIcon,
+  DownloadIcon,
+  KeyboardIcon,
+  MonitorIcon,
+  MoonIcon,
+  RefreshCwIcon,
+  SlidersIcon,
+  SunIcon,
+} from '../components/icons'
 import type { ActionRunner } from '../components/ui'
+import type { AppUpdaterController } from '../hooks/useAppUpdater'
 import type { DisplayDensity } from '../preferences'
 import { SETTINGS_KEYS } from '../query-keys'
 import type { ThemeMode } from '../types'
+import { formatBundleLabel, formatByteSize, formatUpdateDate } from '../updater'
 
 const themeOptions: { value: ThemeMode; label: string; caption: string; preview: 'system' | 'light' | 'dark' }[] = [
   { value: 'system', label: 'System', caption: 'Automatically match your operating system appearance', preview: 'system' },
@@ -32,15 +44,27 @@ export function SettingsView({
   mode,
   density,
   pending,
+  updater,
   onDensityChange,
   onAction,
 }: {
   mode: ThemeMode
   density: DisplayDensity
   pending: boolean
+  updater: AppUpdaterController
   onDensityChange: (density: DisplayDensity) => void
   onAction: ActionRunner
 }) {
+  const { runtime, state } = updater
+  const updateBusy = state.status === 'checking' || state.status === 'downloading' || state.status === 'installing'
+  const bundleLabel = formatBundleLabel(runtime.bundleType, runtime.isDesktop)
+  const canCheckNow = runtime.isDesktop && runtime.canAutoUpdate && !updateBusy
+  const updateDetail = state.status === 'available' || state.status === 'downloading' || state.status === 'installing' || state.status === 'installed'
+    ? state.update
+    : state.status === 'error'
+      ? state.update
+      : null
+  const formattedUpdateDate = updateDetail ? formatUpdateDate(updateDetail.date) : null
   return <section className="view-stack settings-view" aria-label="Settings">
     <div className="page-toolbar"><h1>Settings</h1></div>
     <div className="settings-stack">
@@ -121,6 +145,108 @@ export function SettingsView({
         </div>
       </section>
 
+      <section className="settings-card card">
+        <div className="settings-card-header">
+          <h2 className="heading-with-icon"><DownloadIcon size={16} />Software Updates</h2>
+          <p className="muted">Check GitHub Releases for signed BranchTrace updates. On Debian/Ubuntu, installing a .deb update prompts for system authentication via dpkg.</p>
+        </div>
+
+        <div className="update-status-row">
+          <div className="update-version-meta">
+            <div className="update-version-line">
+              <strong>BranchTrace v{runtime.version}</strong>
+              <span className="meta-pill">{bundleLabel}</span>
+            </div>
+            <p className="muted update-caption">
+              {!runtime.isDesktop
+                ? 'In-app updates are available in the installed desktop app.'
+                : !runtime.canAutoUpdate
+                  ? 'Install BranchTrace from a signed .deb package to enable one-click dpkg updates.'
+                  : state.status === 'checking'
+                    ? 'Checking GitHub Releases for a newer signed package…'
+                    : state.status === 'up-to-date'
+                      ? 'You are running the latest published version.'
+                      : state.status === 'available'
+                        ? `Version v${state.update.version} is ready to download and install.`
+                        : state.status === 'downloading'
+                          ? `Downloading BranchTrace v${state.update.version}…`
+                          : state.status === 'installing'
+                            ? 'Installing .deb package via dpkg… Approve the system password prompt to continue.'
+                            : state.status === 'installed'
+                              ? `BranchTrace v${state.update.version} has been installed via dpkg.`
+                              : 'Updates are checked against signed GitHub Releases manifests.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!canCheckNow}
+            onClick={() => void updater.checkForUpdates()}
+          >
+            <RefreshCwIcon size={14} className={state.status === 'checking' ? 'spin-icon' : undefined} />
+            <span>{state.status === 'checking' ? 'Checking…' : 'Check for Updates'}</span>
+          </button>
+        </div>
+
+        {updateDetail && state.status !== 'installed' && <div className="update-panel">
+          <div className="update-panel-head">
+            <div className="update-panel-title">
+              <span className="ui-badge tone-primary">New version</span>
+              <strong>v{updateDetail.version}</strong>
+              {formattedUpdateDate && <span className="muted">Released {formattedUpdateDate}</span>}
+            </div>
+            {(state.status === 'available' || state.status === 'error') && <button
+              type="button"
+              className="primary-button btn-sm"
+              disabled={!runtime.canAutoUpdate || updateBusy}
+              onClick={() => void updater.installUpdate()}
+            >
+              <DownloadIcon size={14} />
+              <span>{state.status === 'error' ? 'Retry Install' : 'Download & Install'}</span>
+            </button>}
+          </div>
+
+          {updateDetail.body && <pre className="update-notes">{updateDetail.body}</pre>}
+
+          {state.status === 'downloading' && <div className="update-progress-block" aria-live="polite">
+            <div className="update-progress-meta">
+              <span>{formatByteSize(state.progress.downloadedBytes)}{state.progress.totalBytes !== null ? ` / ${formatByteSize(state.progress.totalBytes)}` : ''}</span>
+              {state.progress.percent !== null && <span>{state.progress.percent}%</span>}
+            </div>
+            <div
+              className="update-progress-track"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={state.progress.percent ?? undefined}
+            >
+              <div
+                className={`update-progress-fill ${state.progress.percent === null ? 'indeterminate' : ''}`}
+                style={state.progress.percent !== null ? { width: `${state.progress.percent}%` } : undefined}
+              />
+            </div>
+          </div>}
+
+          {state.status === 'installing' && <p className="update-installing-note" role="status">
+            Verifying signature and installing the .deb package with dpkg… Your local SQLite database is preserved.
+          </p>}
+        </div>}
+
+        {state.status === 'installed' && <div className="update-banner update-banner-success" role="status">
+          <div>
+            <strong>Update v{state.update.version} installed</strong>
+            <p className="muted">Restart BranchTrace to cleanly flush your SQLite database and launch the new version.</p>
+          </div>
+          <button type="button" className="primary-button btn-sm" onClick={() => void updater.relaunch()}>
+            Restart Now
+          </button>
+        </div>}
+
+        {state.status === 'error' && <div className="update-banner update-banner-error" role="alert">
+          <span>{state.message}</span>
+        </div>}
+      </section>
+
       <section className="settings-card card about-card">
         <div className="about-header">
           <span className="brand-mark about-mark" aria-hidden="true"><BranchNodeIcon size={20} /></span>
@@ -130,7 +256,8 @@ export function SettingsView({
           </div>
         </div>
         <div className="about-badges">
-          <span className="meta-pill">v1.0.0</span>
+          <span className="meta-pill">v{runtime.version}</span>
+          <span className="meta-pill">{bundleLabel}</span>
           <span className="meta-pill">Offline-first</span>
           <span className="meta-pill">SQLite Transactions</span>
         </div>

@@ -179,6 +179,113 @@
   font-size: var(--font-size-sm);
 }
 
+/* Software Updates */
+.update-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.update-version-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.update-version-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--font-size-base); }
+.update-caption { font-size: var(--font-size-sm); line-height: 1.45; }
+.update-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+.update-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.update-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--font-size-md);
+}
+.update-notes {
+  margin: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.update-progress-block { display: flex; flex-direction: column; gap: 6px; }
+.update-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+.update-progress-track {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-fill, var(--color-primary));
+  transition: width 140ms ease;
+}
+.update-progress-fill.indeterminate {
+  width: 38%;
+  animation: update-indeterminate 1.2s ease-in-out infinite;
+}
+.update-installing-note {
+  color: var(--color-progress);
+  font-size: var(--font-size-sm);
+}
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid;
+  font-size: var(--font-size-sm);
+}
+.update-banner strong { display: block; margin-bottom: 2px; font-size: var(--font-size-md); }
+.update-banner-success {
+  border-color: var(--color-completed-border);
+  background: var(--color-completed-soft);
+  color: var(--color-completed);
+}
+.update-banner-error {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.spin-icon { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes update-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
 /* Custom Tree Move Picker */
 .move-modal { width: min(480px, 100%); }
 .move-tree-list {

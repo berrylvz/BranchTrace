@@ -251,3 +251,17 @@ export function SlidersIcon(props: IconProps) {
     <circle cx="7" cy="11.5" r="1.25" fill="var(--color-surface, #fff)" />
   </Icon>
 }
+
+export function DownloadIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M8 2.5v7.5M5.25 7.25 8 10l2.75-2.75" />
+    <path d="M2.75 11.25v1a1.5 1.5 0 0 0 1.5 1.5h7.5a1.5 1.5 0 0 0 1.5-1.5v-1" />
+  </Icon>
+}
+
+export function RefreshCwIcon(props: IconProps) {
+  return <Icon {...props}>
+    <path d="M13 8a5 5 0 0 1-8.75 3.3M3 8a5 5 0 0 1 8.75-3.3" />
+    <path d="M11.75 2.25v2.5h-2.5M4.25 13.75v-2.5h2.5" />
+  </Icon>
+}

@@ -15,6 +15,7 @@ import {
 import { ProjectDetailPanel } from './components/ProjectDetailPanel'
 import { AppErrorBoundary, errorMessage, LoadError } from './components/ui'
 import type { ActionRunner, NoticeConfig } from './components/ui'
+import { useAppUpdater } from './hooks/useAppUpdater'
 import { useGlobalShortcut } from './hooks/useGlobalShortcut'
 import { ProgressCalendarModal } from './modals/ProgressCalendarModal'
 import { loadDisplayDensity, saveDisplayDensity } from './preferences'
@@ -76,6 +77,18 @@ function AppShell() {
   const monthly = useQuery({ queryKey: ['monthCalendar', month], queryFn: () => api.getMonthCalendar(month!), enabled: view === 'monthly' && Boolean(month) })
   const trash = useQuery({ queryKey: ['trash', trashKind], queryFn: () => api.listTrash(trashKind), enabled: view === 'trash' })
   const detail = useQuery({ queryKey: ['projectDetail', selectedProjectId], queryFn: () => api.getProjectDetail(selectedProjectId!), enabled: Boolean(selectedProjectId) })
+  const updater = useAppUpdater({
+    onAvailable: (update) => {
+      setNotice({
+        message: `BranchTrace v${update.version} is available`,
+        durationMs: 7000,
+        action: {
+          label: 'Review Update',
+          onClick: () => setView('settings'),
+        },
+      })
+    },
+  })
 
   useEffect(() => {
     document.documentElement.dataset.density = density
@@ -348,11 +361,14 @@ function AppShell() {
           <button
             type="button"
             className={`utility-button ${view === 'settings' ? 'active' : ''}`}
-            aria-label="Settings"
+            aria-label={updater.hasUpdateAvailable ? 'Settings (update available)' : 'Settings'}
             aria-current={view === 'settings' ? 'page' : undefined}
-            title="Settings"
+            title={updater.hasUpdateAvailable ? 'Settings — Update available' : 'Settings'}
             onClick={() => setView('settings')}
-          ><SettingsIcon size={16} /></button>
+          >
+            <SettingsIcon size={16} />
+            {updater.hasUpdateAvailable && <span className="utility-badge-dot" aria-hidden="true" />}
+          </button>
         </div>
       </div>
     </header>
@@ -433,6 +449,7 @@ function AppShell() {
             mode={settings.data?.themeMode ?? 'system'}
             density={density}
             pending={pendingKey === 'settings:theme' || settings.isLoading}
+            updater={updater}
             onDensityChange={handleDensityChange}
             onAction={perform}
           />

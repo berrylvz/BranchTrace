@@ -30,6 +30,16 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyQ0Q1NEM1RTJBNEJFRTUKUldUbHZxVGl4VlROWXNCNHJwd3RRb2RjTTdTTGw2TjUwVUxaK29GNnhWU1BpODlLZ1FuSVBucUoK",
+      "requireSignedVersion": true,
+      "endpoints": [
+        "https://github.com/berrylvz/BranchTrace/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
