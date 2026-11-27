@@ -4,7 +4,7 @@
 
 ---
 
-## Unreleased（Calendar 视图统一与自定义时间段统计）
+## v1.1.0（Calendar 视图统一与自定义时间段统计）
 
 ### 1. 主导航收敛为二视图（Projects / Calendar）
 
