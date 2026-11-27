@@ -2,9 +2,9 @@
 
 枝迹是一个离线优先的树形项目管理与每日行动记录桌面应用，使用 Tauri 2、React、TypeScript、TanStack Query、Rust、rusqlite 和 SQLite。
 
-| project-view | weekly-view | monthly-view |
-| --- | --- | --- |
-| ![project-view](./assets/project-view.png) | ![weekly-view](assets/weekly-view.png) | ![monthly-view](assets/monthly-view.png) |
+| project-view | calendar-view |
+| --- | --- |
+| ![project-view](./assets/project-view.png) | ![calendar-view](assets/calendar-view.png) |
 
 
 
