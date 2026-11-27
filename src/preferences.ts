@@ -1,12 +1,14 @@
 export type DisplayDensity = 'comfortable' | 'compact'
-export type WeeklyViewMode = 'grid' | 'timeline'
-export type MonthlyDisplayMode = 'both' | 'planned' | 'actual'
+export type CalendarDisplayMode = 'both' | 'planned' | 'actual'
+export type MonthlyDisplayMode = CalendarDisplayMode
+export type RangeBreakdownMode = 'projects' | 'days'
 export type InactiveThresholdDays = 7 | 14 | 30
 
 const KEYS = {
   density: 'branchtrace:ui:density',
-  weeklyViewMode: 'branchtrace:ui:weekly-view-mode',
-  weeklyHideEmpty: 'branchtrace:ui:weekly-hide-empty',
+  rangeBreakdownMode: 'branchtrace:ui:range-breakdown-mode',
+  rangeHideEmpty: 'branchtrace:ui:range-hide-empty',
+  legacyWeeklyHideEmpty: 'branchtrace:ui:weekly-hide-empty',
   monthlyDisplayMode: 'branchtrace:ui:monthly-display-mode',
   inactiveThresholdDays: 'branchtrace:ui:inactive-threshold-days',
 } as const
@@ -36,32 +38,33 @@ export function saveDisplayDensity(value: DisplayDensity): void {
   safeSet(KEYS.density, value)
 }
 
-export function loadWeeklyViewMode(): WeeklyViewMode {
-  const saved = safeGet(KEYS.weeklyViewMode)
-  if (saved === 'grid' || saved === 'timeline') return saved
-  if (typeof window !== 'undefined' && window.innerWidth < 1024) return 'timeline'
-  return 'grid'
+export function loadRangeBreakdownMode(): RangeBreakdownMode {
+  const saved = safeGet(KEYS.rangeBreakdownMode)
+  if (saved === 'projects' || saved === 'days') return saved
+  return 'projects'
 }
 
-export function saveWeeklyViewMode(value: WeeklyViewMode): void {
-  safeSet(KEYS.weeklyViewMode, value)
+export function saveRangeBreakdownMode(value: RangeBreakdownMode): void {
+  safeSet(KEYS.rangeBreakdownMode, value)
 }
 
-export function loadWeeklyHideEmpty(): boolean {
-  return safeGet(KEYS.weeklyHideEmpty) === 'true'
+export function loadRangeHideEmpty(): boolean {
+  const saved = safeGet(KEYS.rangeHideEmpty)
+  if (saved !== null) return saved === 'true'
+  return safeGet(KEYS.legacyWeeklyHideEmpty) === 'true'
 }
 
-export function saveWeeklyHideEmpty(value: boolean): void {
-  safeSet(KEYS.weeklyHideEmpty, value ? 'true' : 'false')
+export function saveRangeHideEmpty(value: boolean): void {
+  safeSet(KEYS.rangeHideEmpty, value ? 'true' : 'false')
 }
 
-export function loadMonthlyDisplayMode(): MonthlyDisplayMode {
+export function loadMonthlyDisplayMode(): CalendarDisplayMode {
   const saved = safeGet(KEYS.monthlyDisplayMode)
   if (saved === 'planned' || saved === 'actual' || saved === 'both') return saved
   return 'both'
 }
 
-export function saveMonthlyDisplayMode(value: MonthlyDisplayMode): void {
+export function saveMonthlyDisplayMode(value: CalendarDisplayMode): void {
   safeSet(KEYS.monthlyDisplayMode, value)
 }
 

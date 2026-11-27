@@ -29,12 +29,13 @@ const densityOptions: { value: DisplayDensity; label: string; caption: string }[
 ]
 
 const shortcuts: { keys: string[]; label: string }[] = [
-  { keys: ['1', '2', '3', '⌘/Ctrl+1–3'], label: 'Switch between Projects, Weekly, and Monthly views' },
+  { keys: ['1', '2', '⌘/Ctrl+1–2'], label: 'Switch between Projects and Calendar views' },
+  { keys: ['M', 'S'], label: 'Switch between Month and Summary modes in Calendar' },
   { keys: ['⌘/Ctrl+K', '⌘/Ctrl+F'], label: 'Search projects in the Projects tree' },
-  { keys: ['N'], label: 'Create a new project (Projects) or add a reminder (Monthly)' },
+  { keys: ['N'], label: 'Create a new project (Projects) or add a reminder (Calendar)' },
   { keys: ['↑', '↓', '←', '→', 'Home', 'End'], label: 'Navigate, expand, and collapse nodes in the Projects tree' },
-  { keys: ['←', '→'], label: 'Navigate previous / next week (Weekly) or month (Monthly)' },
-  { keys: ['T'], label: 'Jump to This Week (Weekly) or This Month (Monthly)' },
+  { keys: ['←', '→'], label: 'Navigate previous / next month or date range in Calendar' },
+  { keys: ['T'], label: 'Jump to This Month or latest range ending today in Calendar' },
   { keys: ['F2'], label: 'Inline rename the focused project or reminder' },
   { keys: ['Right-click'], label: 'Open context menu on a project or reminder' },
   { keys: ['Enter', 'Esc'], label: 'Confirm edits, open details, or close side panels & dialogs' },

@@ -1,5 +1,5 @@
-import type { DailyWeekDto, MonthCalendarDto, ProjectDailyItem, ReminderDailyItem } from '../types'
-import { addDays, getWeekStart, parseIsoDate, todayIsoDate, toIsoDate } from '../ui-format.ts'
+import type { DailyDayDto, DailyRangeDto, DailyWeekDto, MonthCalendarDto, ProjectDailyItem, ReminderDailyItem } from '../types'
+import { addDays, daysBetween, getWeekStart, parseIsoDate, todayIsoDate, toIsoDate } from '../ui-format.ts'
 import {
   buildParentPath,
   mockFail,
@@ -91,13 +91,14 @@ function bucketReminders(
   }
 }
 
-function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
-  const validatedStart = validateIsoDate(weekStart)
-  if (parseIsoDate(validatedStart).getDay() !== 1) {
-    mockFail('INVALID_DATE', 'Week start date must be a Monday')
-  }
-  const days: DailyWeekDto['days'] = Array.from({ length: 7 }, (_, offset) => ({
-    date: addDays(validatedStart, offset),
+const MAX_DAILY_RANGE_DAYS = 30
+
+function buildDailyDays(
+  state: MockState,
+  dates: string[],
+): { today: string; overdueReminders: ReminderDailyItem[]; days: DailyDayDto[] } {
+  const days: DailyDayDto[] = dates.map((date) => ({
+    date,
     completedProjects: [],
     progressedProjects: [],
     plannedReminders: [],
@@ -108,7 +109,7 @@ function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
   const activeProjects = treeOrder(state.projects.filter((project) => !projectIsTrashed(project, state)))
   const byId = new Map(activeProjects.map((item) => [item.id, item]))
   for (const project of activeProjects) {
-    const dates = sortedDates(state.progress[project.id])
+    const progressDates = sortedDates(state.progress[project.id])
     const base = {
       projectId: project.id,
       title: project.title,
@@ -118,9 +119,9 @@ function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
     }
     if (project.status === 'completed' && project.completedDate && index.has(project.completedDate)) {
       const day = days[index.get(project.completedDate)!]
-      day.completedProjects.push({ ...base, progressedSameDay: dates.includes(project.completedDate) })
+      day.completedProjects.push({ ...base, progressedSameDay: progressDates.includes(project.completedDate) })
     }
-    for (const progressDate of dates) {
+    for (const progressDate of progressDates) {
       const dayIndex = index.get(progressDate)
       if (dayIndex === undefined) continue
       if (!(project.status === 'completed' && project.completedDate === progressDate)) {
@@ -131,6 +132,7 @@ function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
 
   const today = todayIsoDate()
   const todayIndex = index.get(today)
+  const overdueReminders: ReminderDailyItem[] = []
   bucketReminders(
     state,
     today,
@@ -138,9 +140,13 @@ function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
     (dayIndex, item) => days[dayIndex].plannedReminders.push(item),
     (dayIndex, item) => days[dayIndex].crossDayCompletedReminders.push(item),
     (item) => {
-      if (todayIndex !== undefined) days[todayIndex].overdueReminders.push(item)
+      overdueReminders.push(item)
     },
   )
+  overdueReminders.sort(compareOverdue)
+  if (todayIndex !== undefined) {
+    days[todayIndex].overdueReminders = [...overdueReminders]
+  }
 
   for (const day of days) {
     day.completedProjects.sort((a, b) => a.title.localeCompare(b.title) || a.projectId.localeCompare(b.projectId))
@@ -150,7 +156,33 @@ function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
     day.crossDayCompletedReminders.sort(compareCrossDayCompleted)
     applyShortIds(day.completedProjects, day.progressedProjects)
   }
+
+  return { today, overdueReminders, days }
+}
+
+function buildDailyWeek(state: MockState, weekStart: string): DailyWeekDto {
+  const validatedStart = validateIsoDate(weekStart)
+  if (parseIsoDate(validatedStart).getDay() !== 1) {
+    mockFail('INVALID_DATE', 'Week start date must be a Monday')
+  }
+  const dates = Array.from({ length: 7 }, (_, offset) => addDays(validatedStart, offset))
+  const { today, days } = buildDailyDays(state, dates)
   return { weekStart: validatedStart, today, days }
+}
+
+function buildDailyRange(state: MockState, startDate: string, endDate: string): DailyRangeDto {
+  const validatedStart = validateIsoDate(startDate)
+  const validatedEnd = validateIsoDate(endDate)
+  if (validatedStart > validatedEnd) {
+    mockFail('INVALID_DATE', 'Start date must be on or before end date')
+  }
+  const totalDays = daysBetween(validatedStart, validatedEnd) + 1
+  if (totalDays > MAX_DAILY_RANGE_DAYS) {
+    mockFail('INVALID_DATE', 'Date range cannot exceed 30 days')
+  }
+  const dates = Array.from({ length: totalDays }, (_, offset) => addDays(validatedStart, offset))
+  const { today, overdueReminders, days } = buildDailyDays(state, dates)
+  return { startDate: validatedStart, endDate: validatedEnd, today, overdueReminders, days }
 }
 
 function buildMonthCalendar(state: MockState, month: string): MonthCalendarDto {
@@ -219,5 +251,6 @@ export const viewHandlers: Record<string, MockCommandHandler> = {
     return { today, weekStart: getWeekStart(today), timeZoneLabel: Intl.DateTimeFormat().resolvedOptions().timeZone }
   },
   get_daily_week: (_store, state, args) => buildDailyWeek(state, String(args.weekStart)),
+  get_daily_range: (_store, state, args) => buildDailyRange(state, String(args.startDate), String(args.endDate)),
   get_month_calendar: (_store, state, args) => buildMonthCalendar(state, String(args.month)),
 }

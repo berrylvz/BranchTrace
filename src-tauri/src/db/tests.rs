@@ -18,7 +18,8 @@ use super::trash::{
     preview_project_trash, restore_trash_entry, trash_project, trash_reminder,
 };
 use super::views::{
-    apply_short_ids, get_daily_week, get_daily_week_on, get_month_calendar, get_month_calendar_on,
+    apply_short_ids, get_daily_range_on, get_daily_week, get_daily_week_on, get_month_calendar,
+    get_month_calendar_on,
 };
 use super::worker::DbHandle;
 use crate::models::{
@@ -1129,6 +1130,102 @@ fn create_demo_database_file_produces_standalone_loadable_db() {
     handle.shutdown();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn daily_range_validates_bounds_and_aggregates_projects_reminders_and_global_overdue() {
+    let mut connection = test_connection();
+    let today = local_today();
+    let early = today - Duration::days(17);
+    let mid = today - Duration::days(7);
+    let cross_scheduled = today - Duration::days(9);
+    let early_str = date_string(early);
+    let mid_str = date_string(mid);
+    let cross_scheduled_str = date_string(cross_scheduled);
+
+    let p1 = create_project(&mut connection, "Core Goal", None).unwrap();
+    let p1 = set_project_progress_on(
+        &mut connection,
+        &p1.id,
+        Some(early_str.clone()),
+        true,
+        p1.version,
+        early,
+    )
+    .unwrap();
+    let p1 = set_project_progress_on(
+        &mut connection,
+        &p1.id,
+        Some(mid_str.clone()),
+        true,
+        p1.version,
+        mid,
+    )
+    .unwrap();
+    let p1 = set_project_terminal(
+        &mut connection,
+        &p1.id,
+        p1.version,
+        TerminalStatus::Completed,
+    )
+    .unwrap();
+    update_project_terminal_date(&mut connection, &p1.id, &mid_str, p1.version).unwrap();
+
+    let overdue_r =
+        create_reminder_on(&mut connection, "Past due item", &early_str, early).unwrap();
+    let cross_r = create_reminder_on(
+        &mut connection,
+        "Done next day",
+        &cross_scheduled_str,
+        early,
+    )
+    .unwrap();
+    complete_reminder_on(&mut connection, &cross_r.id, cross_r.version, mid).unwrap();
+
+    // 1-day range works
+    let one_day = get_daily_range_on(&mut connection, &mid_str, &mid_str, today).unwrap();
+    assert_eq!(one_day.days.len(), 1);
+    assert_eq!(one_day.days[0].completed_projects.len(), 1);
+    assert_eq!(
+        one_day.days[0].completed_projects[0].progressed_same_day,
+        Some(true)
+    );
+    assert_eq!(one_day.days[0].cross_day_completed_reminders.len(), 1);
+    // Global overdue reminders are included even when today is outside the selected range.
+    assert_eq!(one_day.overdue_reminders.len(), 1);
+    assert_eq!(one_day.overdue_reminders[0].reminder.id, overdue_r.id);
+
+    // Full 30-day cross-year range succeeds (Dec 15 .. Jan 13 = 30 inclusive days)
+    let thirty_days =
+        get_daily_range_on(&mut connection, "2026-12-15", "2027-01-13", today).unwrap();
+    assert_eq!(thirty_days.days.len(), 30);
+    assert_eq!(thirty_days.days.first().unwrap().date, "2026-12-15");
+    assert_eq!(thirty_days.days.last().unwrap().date, "2027-01-13");
+    assert_eq!(thirty_days.overdue_reminders.len(), 1);
+
+    // 31-day range is rejected
+    assert_eq!(
+        get_daily_range_on(&mut connection, "2026-11-01", "2026-12-01", today)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDate
+    );
+
+    // Reversed range is rejected
+    assert_eq!(
+        get_daily_range_on(&mut connection, "2026-11-20", "2026-11-19", today)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDate
+    );
+
+    // Invalid date is rejected
+    assert_eq!(
+        get_daily_range_on(&mut connection, "2026-02-30", "2026-03-01", today)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDate
+    );
 }
 
 fn test_connection() -> Connection {

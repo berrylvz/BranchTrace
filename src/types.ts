@@ -67,6 +67,14 @@ export interface DailyWeekDto {
   days: DailyDayDto[]
 }
 
+export interface DailyRangeDto {
+  startDate: ISODate
+  endDate: ISODate
+  today: ISODate
+  overdueReminders: ReminderDailyItem[]
+  days: DailyDayDto[]
+}
+
 export interface MonthDayDto {
   date: ISODate
   inCurrentMonth: boolean

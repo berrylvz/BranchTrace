@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { normalizeError } from './api-error.ts'
 import type {
   ClockContext,
+  DailyRangeDto,
   DailyWeekDto,
   MonthCalendarDto,
   ProjectDetailDto,
@@ -66,6 +67,7 @@ export const api = {
   updateReminderCompletedDate: (reminderId: string, date: string, expectedVersion: number) => call<ReminderDto>('update_reminder_completed_date', { reminderId, date, expectedVersion }),
   reorderReminders: (scheduledDate: string, orderedIds: string[]) => call<ReminderDto[]>('reorder_reminders', { scheduledDate, orderedIds }),
   getDailyWeek: (weekStart: string) => call<DailyWeekDto>('get_daily_week', { weekStart }),
+  getDailyRange: (startDate: string, endDate: string) => call<DailyRangeDto>('get_daily_range', { startDate, endDate }),
   getMonthCalendar: (month: string) => call<MonthCalendarDto>('get_month_calendar', { month }),
   previewProjectTrash: (projectId: string) => call<{ activeNodeCount: number }>('preview_project_trash', { projectId }),
   trashProject: (projectId: string) => call<TrashEntryDto>('trash_project', { projectId }),

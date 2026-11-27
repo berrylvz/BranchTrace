@@ -6,7 +6,7 @@ import { STATUS_TEXT } from '../constants'
 import type { DropPosition } from '../constants'
 import { computeReorderedIds } from '../project-tree'
 import { REMINDER_KEYS, TRASH_KEYS } from '../query-keys'
-import type { ISODate, MonthDayDto, ProjectDailyItem, ReminderDailyItem } from '../types'
+import type { DailyDayDto, ISODate, MonthDayDto, ReminderDailyItem } from '../types'
 import {
   describeReminderCompletionTiming,
   formatFullDate,
@@ -16,19 +16,19 @@ import {
   formatWeekdayShort,
   getWeekStart,
 } from '../ui-format'
-import { formatProjectParentSummary } from '../weekly-summary'
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  CalendarDaysIcon,
+  CalendarRangeIcon,
   CheckIcon,
-  ClockAlertIcon,
   CloseIcon,
-  ExternalLinkIcon,
   GripIcon,
   MinusIcon,
   TrashIcon,
   TrendingUpIcon,
 } from './icons'
+import { ProjectDailyRow } from './ProjectDailyRow'
 import { ActionMenu, Badge, ConfirmDialog, FormDialog, isEditableElement, SidePanel } from './ui'
 import type { ActionRunner } from './ui'
 
@@ -40,6 +40,7 @@ export function MonthReminderRow({
   overdue = false,
   inPanel = false,
   showDeleteButton = false,
+  dateLink,
   pendingKey,
   dragId = null,
   dropPosition = null,
@@ -56,6 +57,7 @@ export function MonthReminderRow({
   overdue?: boolean
   inPanel?: boolean
   showDeleteButton?: boolean
+  dateLink?: { date: ISODate; label: string; title?: string }
   pendingKey: string | null
   dragId?: string | null
   dropPosition?: DropPosition | null
@@ -276,6 +278,12 @@ export function MonthReminderRow({
               onClick={() => onJumpToDate(reminder.scheduledDate)}
             >{inPanel ? `${formatMonthDay(reminder.scheduledDate)} · ${formatOverdueDuration(reminder.scheduledDate, today)}` : formatMonthDay(reminder.scheduledDate)}</button>}
             {overdue && !onJumpToDate && <Badge tone="overdue">{formatShortDate(reminder.scheduledDate)} · {formatOverdueDuration(reminder.scheduledDate, today)}</Badge>}
+            {!overdue && dateLink && onJumpToDate && <button
+              type="button"
+              className="reminder-date-link"
+              title={dateLink.title ?? `Open ${formatFullDate(dateLink.date)}`}
+              onClick={() => onJumpToDate(dateLink.date)}
+            >{dateLink.label}</button>}
             {!overdue && isOverdueItem && <Badge tone="overdue">{formatOverdueDuration(reminder.scheduledDate, today)}</Badge>}
             {timingHint && <span className={`month-reminder-hint ${timingHint.tone === 'early' ? 'tone-early' : ''}`} title={timingHint.title}>{timingHint.text}</span>}
           </div>
@@ -302,24 +310,28 @@ export function MonthReminderRow({
 }
 
 export function DayDetailPanel({
-  day,
+  date,
+  monthDay = null,
+  dailyDay = null,
   today,
-  overdueReminders,
   pendingKey,
+  contextMode,
   onStepDay,
-  onSelectDate,
-  onOpenInWeekly,
+  onSummarizeWeek,
+  onShowInMonth,
   onOpenProjectDetail,
   onAction,
   onClose,
 }: {
-  day: MonthDayDto
+  date: ISODate
+  monthDay?: MonthDayDto | null
+  dailyDay?: DailyDayDto | null
   today: ISODate
-  overdueReminders: ReminderDailyItem[]
   pendingKey: string | null
+  contextMode: 'month' | 'range'
   onStepDay: (delta: number) => void
-  onSelectDate: (date: ISODate) => void
-  onOpenInWeekly: (date: ISODate) => void
+  onSummarizeWeek: (date: ISODate) => void
+  onShowInMonth: (date: ISODate) => void
   onOpenProjectDetail: (projectId: string) => void
   onAction: ActionRunner
   onClose: () => void
@@ -330,29 +342,33 @@ export function DayDetailPanel({
   const [dropTarget, setDropTarget] = useState<{ id: string; position: DropPosition } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const weekStart = useMemo(() => getWeekStart(day.date), [day.date])
+  const weekStart = useMemo(() => getWeekStart(date), [date])
   const weekQuery = useQuery({
     queryKey: ['dailyWeek', weekStart],
     queryFn: () => api.getDailyWeek(weekStart),
+    enabled: !dailyDay,
     staleTime: 15_000,
   })
-  const dayProjects = useMemo(
-    () => weekQuery.data?.days.find((entry) => entry.date === day.date),
-    [weekQuery.data, day.date],
+  const resolvedDailyDay = useMemo(
+    () => dailyDay ?? weekQuery.data?.days.find((entry) => entry.date === date) ?? null,
+    [dailyDay, weekQuery.data, date],
   )
 
   useEffect(() => {
     setNewTitle('')
     setCreateError(null)
-  }, [day.date])
+  }, [date])
 
-  const canAdd = day.date >= today
-  const isToday = day.date === today
-  const creating = pendingKey === `monthly:${day.date}:create`
+  const canAdd = date >= today
+  const isToday = date === today
+  const creating = pendingKey === `calendar:${date}:create`
+
+  const plannedSource = monthDay?.plannedReminders ?? resolvedDailyDay?.plannedReminders ?? []
+  const crossDaySource = monthDay?.crossDayCompletedReminders ?? resolvedDailyDay?.crossDayCompletedReminders ?? []
 
   const plannedReminders = useMemo(
-    () => [...day.plannedReminders].sort((a, b) => a.reminder.sortOrder - b.reminder.sortOrder || a.reminder.id.localeCompare(b.reminder.id)),
-    [day.plannedReminders],
+    () => [...plannedSource].sort((a, b) => a.reminder.sortOrder - b.reminder.sortOrder || a.reminder.id.localeCompare(b.reminder.id)),
+    [plannedSource],
   )
 
   const addReminder = async (event: FormEvent) => {
@@ -366,9 +382,9 @@ export function DayDetailPanel({
     }
     setCreateError(null)
     const result = await onAction(
-      () => api.createReminder(trimmed, day.date),
+      () => api.createReminder(trimmed, date),
       'Reminder added',
-      { key: `monthly:${day.date}:create`, invalidate: REMINDER_KEYS },
+      { key: `calendar:${date}:create`, invalidate: REMINDER_KEYS },
     )
     if (result.ok) {
       setNewTitle('')
@@ -384,7 +400,7 @@ export function DayDetailPanel({
     const nextIds = computeReorderedIds(ordered, fromId, targetId, position)
     if (!nextIds) return
     await onAction(
-      () => api.reorderReminders(day.date, nextIds),
+      () => api.reorderReminders(date, nextIds),
       'Reminder order saved',
       { key: `reminder:${fromId}:reorder`, invalidate: REMINDER_KEYS },
     )
@@ -403,16 +419,31 @@ export function DayDetailPanel({
     setDropTarget((prev) => prev?.id === id ? null : prev)
   }, [])
 
-  const completedProjects = dayProjects?.completedProjects ?? []
-  const progressedProjects = dayProjects?.progressedProjects ?? []
+  const completedProjects = resolvedDailyDay?.completedProjects ?? []
+  const progressedProjects = resolvedDailyDay?.progressedProjects ?? []
+  const completedCount = monthDay?.completedProjectCount ?? completedProjects.length
+  const progressedCount = monthDay?.progressedProjectCount ?? progressedProjects.length
+  const loadingDayData = !monthDay && !resolvedDailyDay && weekQuery.isLoading
 
   return <SidePanel
-    title={`${formatWeekdayShort(day.date)}, ${formatFullDate(day.date)}`}
+    title={`${formatWeekdayShort(date)}, ${formatFullDate(date)}`}
     badge={isToday ? <Badge tone="primary">Today</Badge> : undefined}
     headerActions={<>
       <button type="button" className="icon-button" onClick={() => onStepDay(-1)} aria-label="Previous day" title="Previous day"><ArrowLeftIcon size={14} /></button>
       <button type="button" className="icon-button" onClick={() => onStepDay(1)} aria-label="Next day" title="Next day"><ArrowRightIcon size={14} /></button>
-      <button type="button" className="icon-button" onClick={() => onOpenInWeekly(day.date)} aria-label="Open this day in Weekly view" title="Open in Weekly view"><ExternalLinkIcon size={14} /></button>
+      {contextMode === 'month' ? <button
+        type="button"
+        className="icon-button"
+        onClick={() => onSummarizeWeek(date)}
+        aria-label="Summarize the week containing this day"
+        title="Summarize this week"
+      ><CalendarRangeIcon size={14} /></button> : <button
+        type="button"
+        className="icon-button"
+        onClick={() => onShowInMonth(date)}
+        aria-label="Show this day in Month calendar"
+        title="Show in Month calendar"
+      ><CalendarDaysIcon size={14} /></button>}
     </>}
     onClose={onClose}
   >
@@ -438,7 +469,7 @@ export function DayDetailPanel({
             }
           }}
           placeholder="Add reminder for this day…"
-          aria-label={`Add reminder for ${formatFullDate(day.date)}`}
+          aria-label={`Add reminder for ${formatFullDate(date)}`}
         />
         <button type="submit" className="primary-button btn-sm" disabled={creating || !newTitle.trim()}>
           {creating ? 'Adding…' : 'Add'}
@@ -446,7 +477,7 @@ export function DayDetailPanel({
       </form> : <p className="day-panel-past-note">Past date — new reminders can only be scheduled for today or future dates.</p>}
       {createError && <p className="inline-error" role="alert">{createError}</p>}
 
-      {plannedReminders.length > 0 ? <div className="day-panel-items">
+      {loadingDayData ? <p className="muted">Loading reminders…</p> : plannedReminders.length > 0 ? <div className="day-panel-items">
         {plannedReminders.map((item) => <MonthReminderRow
           key={`panel-planned-${item.reminder.id}`}
           item={item}
@@ -466,13 +497,13 @@ export function DayDetailPanel({
       </div> : <div className="day-panel-empty">No reminders scheduled for this day.</div>}
     </section>
 
-    {day.crossDayCompletedReminders.length > 0 && <section className="day-panel-section">
+    {crossDaySource.length > 0 && <section className="day-panel-section">
       <div className="day-panel-section-title">
         <span>Completed from Other Dates</span>
-        <span className="count-label">{day.crossDayCompletedReminders.length}</span>
+        <span className="count-label">{crossDaySource.length}</span>
       </div>
       <div className="day-panel-items">
-        {day.crossDayCompletedReminders.map((item) => <MonthReminderRow
+        {crossDaySource.map((item) => <MonthReminderRow
           key={`panel-cross-${item.reminder.id}`}
           item={item}
           today={today}
@@ -484,74 +515,26 @@ export function DayDetailPanel({
       </div>
     </section>}
 
-    {isToday && overdueReminders.length > 0 && <section className="day-panel-section">
-      <div className="day-panel-section-title tone-overdue">
-        <ClockAlertIcon size={13} />
-        <span>Current Overdue Reminders</span>
-        <span className="count-label overdue-count">{overdueReminders.length}</span>
-      </div>
-      <div className="day-panel-items">
-        {overdueReminders.map((item) => <MonthReminderRow
-          key={`panel-overdue-${item.reminder.id}`}
-          item={item}
-          today={today}
-          pendingKey={pendingKey}
-          overdue
-          inPanel
-          showDeleteButton
-          onJumpToDate={onSelectDate}
-          onAction={onAction}
-        />)}
-      </div>
-    </section>}
-
-    {(day.completedProjectCount > 0 || completedProjects.length > 0) && <section className="day-panel-section">
+    {(completedCount > 0 || completedProjects.length > 0) && <section className="day-panel-section">
       <div className="day-panel-section-title tone-completed">
         <CheckIcon size={13} strokeWidth={2.3} />
         <span>Completed Projects</span>
-        <span className="count-label">{day.completedProjectCount}</span>
+        <span className="count-label">{completedCount}</span>
       </div>
-      {weekQuery.isLoading && !dayProjects ? <p className="muted">Loading projects…</p> : <div className="day-panel-items">
-        {completedProjects.map((item) => <DayProjectRow key={item.projectId} item={item} completed onOpenProjectDetail={onOpenProjectDetail} />)}
+      {weekQuery.isLoading && !resolvedDailyDay ? <p className="muted">Loading projects…</p> : <div className="day-panel-items">
+        {completedProjects.map((item) => <ProjectDailyRow key={item.projectId} item={item} completed onOpenProjectDetail={onOpenProjectDetail} />)}
       </div>}
     </section>}
 
-    {(day.progressedProjectCount > 0 || progressedProjects.length > 0) && <section className="day-panel-section">
+    {(progressedCount > 0 || progressedProjects.length > 0) && <section className="day-panel-section">
       <div className="day-panel-section-title tone-progress">
         <TrendingUpIcon size={13} strokeWidth={2} />
         <span>Project Progress</span>
-        <span className="count-label">{day.progressedProjectCount}</span>
+        <span className="count-label">{progressedCount}</span>
       </div>
-      {weekQuery.isLoading && !dayProjects ? <p className="muted">Loading progress records…</p> : <div className="day-panel-items">
-        {progressedProjects.map((item) => <DayProjectRow key={item.projectId} item={item} onOpenProjectDetail={onOpenProjectDetail} />)}
+      {weekQuery.isLoading && !resolvedDailyDay ? <p className="muted">Loading progress records…</p> : <div className="day-panel-items">
+        {progressedProjects.map((item) => <ProjectDailyRow key={item.projectId} item={item} onOpenProjectDetail={onOpenProjectDetail} />)}
       </div>}
     </section>}
   </SidePanel>
-}
-
-function DayProjectRow({
-  item,
-  completed = false,
-  onOpenProjectDetail,
-}: {
-  item: ProjectDailyItem
-  completed?: boolean
-  onOpenProjectDetail: (projectId: string) => void
-}) {
-  const parentSummary = formatProjectParentSummary(item.parentPath)
-  const meta = [parentSummary, item.shortId].filter(Boolean).join(' · ')
-  const fullPath = [...item.parentPath, item.title].join(' / ')
-
-  return <button type="button" className="daily-item" onClick={() => onOpenProjectDetail(item.projectId)} title={fullPath}>
-    <span className="item-icon" style={{ color: completed ? 'var(--color-completed)' : 'var(--color-progress)' }} aria-hidden="true">
-      {completed ? <CheckIcon size={13} strokeWidth={2.3} /> : <TrendingUpIcon size={13} strokeWidth={2} />}
-    </span>
-    <span className="item-text">
-      <span className="item-heading">
-        <strong>{item.title}</strong>
-        {completed && item.progressedSameDay && <Badge tone="progress">Progressed same day</Badge>}
-      </span>
-      {meta && <small>{meta}</small>}
-    </span>
-  </button>
 }

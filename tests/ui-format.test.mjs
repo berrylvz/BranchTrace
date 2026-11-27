@@ -4,6 +4,7 @@ import {
   addDays,
   daysBetween,
   describeReminderCompletionTiming,
+  formatDateRangeLabel,
   formatFullDate,
   formatMonthDay,
   formatMonthLabel,
@@ -43,6 +44,9 @@ test('groupProgressDatesByMonth groups by descending year-month and sorts dates 
 test('formatWeekRange and date formatters output English dates and handle cross-year ranges', () => {
   assert.equal(formatWeekRange('2026-11-09', '2026-11-15'), 'Nov 9 – Nov 15, 2026')
   assert.equal(formatWeekRange('2025-12-29', '2026-01-04'), 'Dec 29, 2025 – Jan 4, 2026')
+  assert.equal(formatDateRangeLabel('2026-11-27', '2026-11-27'), 'Nov 27, 2026')
+  assert.equal(formatDateRangeLabel('2026-11-01', '2026-11-30'), 'Nov 1 – Nov 30, 2026')
+  assert.equal(formatDateRangeLabel('2026-12-20', '2027-01-18'), 'Dec 20, 2026 – Jan 18, 2027')
   assert.equal(formatMonthLabel('2026-11'), 'November 2026')
   assert.equal(formatMonthDay('2026-03-07'), 'Mar 7')
   assert.equal(formatFullDate('2026-03-07'), 'Mar 7, 2026')

@@ -141,6 +141,11 @@ export function formatWeekRange(weekStart: ISODate, weekEnd: ISODate) {
   return `${formatMonthDay(weekStart)} – ${formatMonthDay(weekEnd)}, ${startYear}`
 }
 
+export function formatDateRangeLabel(startDate: ISODate, endDate: ISODate) {
+  if (startDate === endDate) return formatFullDate(startDate)
+  return formatWeekRange(startDate, endDate)
+}
+
 export function formatTrashTimestamp(isoString: string) {
   const parsed = new Date(isoString)
   if (Number.isNaN(parsed.getTime())) return isoString

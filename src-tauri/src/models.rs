@@ -289,6 +289,16 @@ pub struct DailyWeekDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DailyRangeDto {
+    pub start_date: String,
+    pub end_date: String,
+    pub today: String,
+    pub overdue_reminders: Vec<ReminderDailyItem>,
+    pub days: Vec<DailyDayDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MonthDayDto {
     pub date: String,
     pub in_current_month: bool,

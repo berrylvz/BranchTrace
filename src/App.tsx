@@ -5,7 +5,6 @@ import { api } from './api'
 import {
   BranchNodeIcon,
   CalendarDaysIcon,
-  CalendarRangeIcon,
   CloseIcon,
   MoonIcon,
   SettingsIcon,
@@ -21,13 +20,15 @@ import { ProgressCalendarModal } from './modals/ProgressCalendarModal'
 import { loadDisplayDensity, saveDisplayDensity } from './preferences'
 import type { DisplayDensity } from './preferences'
 import { ALL_QUERY_KEYS, SETTINGS_KEYS } from './query-keys'
-import type { ApiError, ISODate } from './types'
+import { buildRangePreset } from './range-summary'
+import type { DateRangeBounds } from './range-summary'
+import type { ApiError } from './types'
 import { formatFullDate, getWeekStart, todayIsoDate } from './ui-format'
-import { MonthlyView } from './views/MonthlyView'
+import { CalendarView } from './views/CalendarView'
+import type { CalendarMode } from './views/CalendarView'
 import { ProjectView } from './views/ProjectView'
 import { SettingsView } from './views/SettingsView'
 import { TrashView } from './views/TrashView'
-import { WeeklyView } from './views/WeeklyView'
 
 function isStartupError(error: unknown): error is ApiError {
   if (typeof error !== 'object' || error === null || !('code' in error)) return false
@@ -44,17 +45,16 @@ const queryClient = new QueryClient({
   },
 })
 
-type View = 'project' | 'weekly' | 'monthly' | 'trash' | 'settings'
+type View = 'project' | 'calendar' | 'trash' | 'settings'
 
 function AppShell() {
   const client = useQueryClient()
   const [view, setView] = useState<View>('project')
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>('month')
   const [density, setDensity] = useState<DisplayDensity>(() => loadDisplayDensity())
   const [effectiveDark, setEffectiveDark] = useState(false)
-  const [weekStart, setWeekStart] = useState<string | null>(null)
   const [month, setMonth] = useState<string | null>(null)
-  const [focusedDate, setFocusedDate] = useState<string | null>(null)
-  const [focusDayTick, setFocusDayTick] = useState(0)
+  const [dateRange, setDateRange] = useState<DateRangeBounds | null>(null)
   const [trashKind, setTrashKind] = useState<'project' | 'reminder'>('project')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [calendarProjectId, setCalendarProjectId] = useState<string | null>(null)
@@ -63,18 +63,25 @@ function AppShell() {
   const [pendingKey, setPendingKey] = useState<string | null>(null)
   const [focusCreateTick, setFocusCreateTick] = useState(0)
   const [focusSearchTick, setFocusSearchTick] = useState(0)
-  const [focusMonthlyCreateTick, setFocusMonthlyCreateTick] = useState(0)
+  const [focusCalendarCreateTick, setFocusCalendarCreateTick] = useState(0)
   const [addChildRequest, setAddChildRequest] = useState<{ parentId: string; tick: number } | null>(null)
   const [locateTarget, setLocateTarget] = useState<{ projectId: string; tick: number } | null>(null)
-  const [monthlyDateRequest, setMonthlyDateRequest] = useState<{ date: ISODate; tick: number } | null>(null)
   const actionLock = useRef(false)
   const previousClock = useRef<{ today: string; weekStart: string } | null>(null)
 
   const clock = useQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, refetchInterval: 60_000 })
   const projects = useQuery({ queryKey: ['projectTree'], queryFn: api.getProjectTree })
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getAppSettings })
-  const weekly = useQuery({ queryKey: ['dailyWeek', weekStart], queryFn: () => api.getDailyWeek(weekStart!), enabled: view === 'weekly' && Boolean(weekStart) })
-  const monthly = useQuery({ queryKey: ['monthCalendar', month], queryFn: () => api.getMonthCalendar(month!), enabled: view === 'monthly' && Boolean(month) })
+  const monthly = useQuery({
+    queryKey: ['monthCalendar', month],
+    queryFn: () => api.getMonthCalendar(month!),
+    enabled: view === 'calendar' && calendarMode === 'month' && Boolean(month),
+  })
+  const dailyRange = useQuery({
+    queryKey: ['dailyRange', dateRange?.startDate, dateRange?.endDate],
+    queryFn: () => api.getDailyRange(dateRange!.startDate, dateRange!.endDate),
+    enabled: view === 'calendar' && calendarMode === 'range' && Boolean(dateRange),
+  })
   const trash = useQuery({ queryKey: ['trash', trashKind], queryFn: () => api.listTrash(trashKind), enabled: view === 'trash' })
   const detail = useQuery({ queryKey: ['projectDetail', selectedProjectId], queryFn: () => api.getProjectDetail(selectedProjectId!), enabled: Boolean(selectedProjectId) })
   const updater = useAppUpdater({
@@ -100,17 +107,24 @@ function AppShell() {
     const previous = previousClock.current
     previousClock.current = { today: current.today, weekStart: current.weekStart }
     const currentMonthKey = current.today.slice(0, 7)
+    const defaultRange = buildRangePreset('last-7', current.today, current.weekStart)
     if (!previous) {
-      setWeekStart((currentWeek) => currentWeek ?? current.weekStart)
       setMonth((currentMonth) => currentMonth ?? currentMonthKey)
+      setDateRange((currentRange) => currentRange ?? defaultRange)
       return
     }
     if (previous.today !== current.today || previous.weekStart !== current.weekStart) {
       const previousMonthKey = previous.today.slice(0, 7)
-      setWeekStart((currentWeek) => (!currentWeek || currentWeek === previous.weekStart ? current.weekStart : currentWeek))
+      const previousDefaultRange = buildRangePreset('last-7', previous.today, previous.weekStart)
       setMonth((currentMonth) => (!currentMonth || currentMonth === previousMonthKey ? currentMonthKey : currentMonth))
+      setDateRange((currentRange) => (
+        !currentRange
+        || (currentRange.startDate === previousDefaultRange.startDate && currentRange.endDate === previousDefaultRange.endDate)
+          ? defaultRange
+          : currentRange
+      ))
       void Promise.all(
-        ['projectTree', 'dailyWeek', 'monthCalendar', 'projectDetail', 'projectProgressMonth']
+        ['projectTree', 'dailyWeek', 'dailyRange', 'monthCalendar', 'projectDetail', 'projectProgressMonth']
           .map((key) => client.invalidateQueries({ queryKey: [key] })),
       )
     }
@@ -150,63 +164,28 @@ function AppShell() {
     return () => media.removeEventListener('change', apply)
   }, [settings.data?.themeMode])
 
-  const openWeeklyView = useCallback(() => {
-    setFocusedDate(null)
-    setView('weekly')
-    void client
-      .fetchQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, staleTime: 0 })
-      .then((fresh) => {
-        setWeekStart((current) => current ?? fresh.weekStart)
-        return Promise.all([
-          client.invalidateQueries({ queryKey: ['dailyWeek'] }),
-          client.invalidateQueries({ queryKey: ['projectTree'] }),
-        ])
-      })
-      .catch(() => {
-        if (clock.data) setWeekStart((current) => current ?? clock.data!.weekStart)
-      })
-  }, [client, clock.data])
-
-  const openWeeklyForDate = useCallback((date: ISODate) => {
-    const targetWeek = getWeekStart(date)
-    setWeekStart(targetWeek)
-    setFocusedDate(date)
-    setFocusDayTick((tick) => tick + 1)
-    setView('weekly')
-    void Promise.all([
-      client.invalidateQueries({ queryKey: ['clockContext'] }),
-      client.invalidateQueries({ queryKey: ['dailyWeek', targetWeek] }),
-    ])
-  }, [client])
-
-  const openMonthlyView = useCallback(() => {
-    setView('monthly')
+  const openCalendarView = useCallback(() => {
+    setCalendarMode('month')
+    setView('calendar')
     void client
       .fetchQuery({ queryKey: ['clockContext'], queryFn: api.getClockContext, staleTime: 0 })
       .then((fresh) => {
         const freshMonth = fresh.today.slice(0, 7)
         setMonth((current) => current ?? freshMonth)
+        setDateRange((current) => current ?? buildRangePreset('last-7', fresh.today, fresh.weekStart))
         return Promise.all([
           client.invalidateQueries({ queryKey: ['monthCalendar'] }),
+          client.invalidateQueries({ queryKey: ['dailyRange'] }),
           client.invalidateQueries({ queryKey: ['projectTree'] }),
         ])
       })
       .catch(() => {
-        if (clock.data) setMonth((current) => current ?? clock.data!.today.slice(0, 7))
+        if (clock.data) {
+          setMonth((current) => current ?? clock.data!.today.slice(0, 7))
+          setDateRange((current) => current ?? buildRangePreset('last-7', clock.data!.today, clock.data!.weekStart))
+        }
       })
   }, [client, clock.data])
-
-  const openMonthlyForDate = useCallback((date: ISODate) => {
-    const targetMonth = date.slice(0, 7)
-    setMonth(targetMonth)
-    setSelectedProjectId(null)
-    setMonthlyDateRequest({ date, tick: Date.now() })
-    setView('monthly')
-    void Promise.all([
-      client.invalidateQueries({ queryKey: ['clockContext'] }),
-      client.invalidateQueries({ queryKey: ['monthCalendar', targetMonth] }),
-    ])
-  }, [client])
 
   const locateProject = useCallback((projectId: string) => {
     setView('project')
@@ -236,25 +215,24 @@ function AppShell() {
     }
     if (mod && !event.altKey && !event.shiftKey && lower === 'n') {
       event.preventDefault()
-      if (view === 'monthly') {
-        setFocusMonthlyCreateTick((tick) => tick + 1)
+      if (view === 'calendar') {
+        setFocusCalendarCreateTick((tick) => tick + 1)
       } else {
         setView('project')
         setFocusCreateTick((tick) => tick + 1)
       }
       return
     }
-    if (!event.altKey && !event.shiftKey && (event.key === '1' || event.key === '2' || event.key === '3')) {
+    if (!event.altKey && !event.shiftKey && (event.key === '1' || event.key === '2')) {
       event.preventDefault()
       if (event.key === '1') setView('project')
-      else if (event.key === '2') openWeeklyView()
-      else openMonthlyView()
+      else openCalendarView()
       return
     }
     if (!mod && !event.altKey && !event.shiftKey && lower === 'n') {
       event.preventDefault()
-      if (view === 'monthly') {
-        setFocusMonthlyCreateTick((tick) => tick + 1)
+      if (view === 'calendar') {
+        setFocusCalendarCreateTick((tick) => tick + 1)
       } else {
         setView('project')
         setFocusCreateTick((tick) => tick + 1)
@@ -311,17 +289,19 @@ function AppShell() {
     )
   }
 
-  const startupError = ([projects.error, settings.error, weekly.error, monthly.error, trash.error] as unknown[]).find(isStartupError)
+  const startupError = ([projects.error, settings.error, monthly.error, dailyRange.error, trash.error] as unknown[]).find(isStartupError)
   if (startupError) {
     return <StartupErrorView error={startupError} />
   }
 
   const projectList = projects.data ?? []
   const today = clock.data?.today ?? todayIsoDate()
+  const currentWeekStart = clock.data?.weekStart ?? getWeekStart(today)
   const currentMonth = today.slice(0, 7)
+  const effectiveRange = dateRange ?? buildRangePreset('last-7', today, currentWeekStart)
   const calendarProject = projectList.find((project) => project.id === calendarProjectId)
 
-  return <div className={`app-shell ${view === 'monthly' ? 'view-monthly' : ''}`}>
+  return <div className={`app-shell ${view === 'calendar' ? 'view-calendar' : ''}`}>
     <header className="topbar">
       <div className="brand-block">
         <span className="brand-mark" aria-hidden="true"><BranchNodeIcon size={15} /></span>
@@ -331,11 +311,8 @@ function AppShell() {
         <button type="button" data-focus-fallback className={`nav-item ${view === 'project' ? 'active' : ''}`} aria-current={view === 'project' ? 'page' : undefined} onClick={() => setView('project')}>
           <BranchNodeIcon size={15} /><span>Projects</span>
         </button>
-        <button type="button" className={`nav-item ${view === 'weekly' ? 'active' : ''}`} aria-current={view === 'weekly' ? 'page' : undefined} onClick={openWeeklyView}>
-          <CalendarRangeIcon size={15} /><span>Weekly</span>
-        </button>
-        <button type="button" className={`nav-item ${view === 'monthly' ? 'active' : ''}`} aria-current={view === 'monthly' ? 'page' : undefined} onClick={openMonthlyView}>
-          <CalendarDaysIcon size={15} /><span>Monthly</span>
+        <button type="button" className={`nav-item ${view === 'calendar' ? 'active' : ''}`} aria-current={view === 'calendar' ? 'page' : undefined} onClick={openCalendarView}>
+          <CalendarDaysIcon size={15} /><span>Calendar</span>
         </button>
       </nav>
       <div className="top-actions">
@@ -406,35 +383,24 @@ function AppShell() {
             onOpenCalendar={setCalendarProjectId}
           />
         </>}
-        {view === 'weekly' && <>
+        {view === 'calendar' && <>
           {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
-          {weekly.isError && <LoadError error={weekly.error} retry={() => void weekly.refetch()} />}
-          <WeeklyView
-            weekly={weekly.data}
-            weekStart={weekStart ?? clock.data?.weekStart ?? ''}
-            currentWeekStart={clock.data?.weekStart ?? ''}
-            focusedDate={focusedDate}
-            focusDayTick={focusDayTick}
-            onWeekChange={setWeekStart}
-            onFocusDateChange={setFocusedDate}
-            onOpenDetail={setSelectedProjectId}
-            onOpenMonthlyDay={openMonthlyForDate}
-          />
-        </>}
-        {view === 'monthly' && <>
-          {clock.isError && <LoadError error={clock.error} retry={() => void clock.refetch()} />}
-          {monthly.isError && <LoadError error={monthly.error} retry={() => void monthly.refetch()} />}
-          <MonthlyView
+          {calendarMode === 'month' && monthly.isError && <LoadError error={monthly.error} retry={() => void monthly.refetch()} />}
+          {calendarMode === 'range' && dailyRange.isError && <LoadError error={dailyRange.error} retry={() => void dailyRange.refetch()} />}
+          <CalendarView
+            mode={calendarMode}
             calendar={monthly.data}
+            rangeData={dailyRange.data}
             month={month ?? currentMonth}
             currentMonth={currentMonth}
+            rangeBounds={effectiveRange}
             today={today}
+            weekStart={currentWeekStart}
             pendingKey={pendingKey}
-            focusCreateTick={focusMonthlyCreateTick}
-            selectedDateRequest={monthlyDateRequest}
-            onClearSelectedDateRequest={() => setMonthlyDateRequest(null)}
+            focusCreateTick={focusCalendarCreateTick}
+            onModeChange={setCalendarMode}
             onMonthChange={setMonth}
-            onOpenWeeklyDay={openWeeklyForDate}
+            onRangeChange={setDateRange}
             onOpenProjectDetail={setSelectedProjectId}
             onAction={perform}
           />
@@ -464,7 +430,7 @@ function AppShell() {
         today={today}
         pendingKey={pendingKey}
         showLocateButton={view !== 'project'}
-        overlay={view === 'monthly'}
+        overlay={view === 'calendar'}
         retry={() => void detail.refetch()}
         onClose={() => setSelectedProjectId(null)}
         onLocate={locateProject}

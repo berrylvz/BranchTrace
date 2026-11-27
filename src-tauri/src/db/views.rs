@@ -4,12 +4,15 @@ use super::repo::{
 };
 use super::support::{date_string, local_today, parse_date, parse_month};
 use crate::models::{
-    ApiError, DailyDayDto, DailyWeekDto, ErrorCode, ItemStatus, MonthCalendarDto, MonthDayDto,
-    ProjectDailyItem, ProjectRecord, ReminderDailyItem, ReminderDisplayType, ReminderRecord,
+    ApiError, DailyDayDto, DailyRangeDto, DailyWeekDto, ErrorCode, ItemStatus, MonthCalendarDto,
+    MonthDayDto, ProjectDailyItem, ProjectRecord, ReminderDailyItem, ReminderDisplayType,
+    ReminderRecord,
 };
 use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::Connection;
 use std::collections::HashMap;
+
+pub(super) const MAX_DAILY_RANGE_DAYS: i64 = 30;
 
 trait DayReminderBuckets {
     fn planned_mut(&mut self) -> &mut Vec<ReminderDailyItem>;
@@ -59,6 +62,37 @@ fn build_week_dates(week_start: &str) -> Result<Vec<String>, ApiError> {
                 ApiError::new(
                     ErrorCode::InvalidDate,
                     "Week range is outside supported dates",
+                )
+            })?;
+        dates.push(date_string(day));
+    }
+    Ok(dates)
+}
+
+fn build_range_dates(start_date: &str, end_date: &str) -> Result<Vec<String>, ApiError> {
+    let start = parse_date(start_date)?;
+    let end = parse_date(end_date)?;
+    if start > end {
+        return Err(ApiError::new(
+            ErrorCode::InvalidDate,
+            "Start date must be on or before end date",
+        ));
+    }
+    let total_days = (end - start).num_days() + 1;
+    if total_days > MAX_DAILY_RANGE_DAYS {
+        return Err(ApiError::new(
+            ErrorCode::InvalidDate,
+            "Date range cannot exceed 30 days",
+        ));
+    }
+    let mut dates = Vec::with_capacity(total_days as usize);
+    for offset in 0..total_days {
+        let day = start
+            .checked_add_signed(Duration::days(offset))
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCode::InvalidDate,
+                    "Date range is outside supported dates",
                 )
             })?;
         dates.push(date_string(day));
@@ -134,7 +168,7 @@ fn make_project_daily_item(
     }
 }
 
-fn populate_week_projects(
+fn populate_range_projects(
     days: &mut [DailyDayDto],
     day_indexes: &HashMap<String, usize>,
     ordered_records: &[ProjectRecord],
@@ -281,12 +315,11 @@ fn sort_cross_day_completed_reminders(items: &mut [ReminderDailyItem]) {
     });
 }
 
-pub(super) fn get_daily_week_on(
+fn build_daily_days_on(
     connection: &Connection,
-    week_start: &str,
+    dates: Vec<String>,
     today: NaiveDate,
-) -> Result<DailyWeekDto, ApiError> {
-    let dates = build_week_dates(week_start)?;
+) -> Result<(String, Vec<ReminderDailyItem>, Vec<DailyDayDto>), ApiError> {
     let today_str = date_string(today);
     let records = load_project_records(connection, false)?;
     let ordered_records = tree_order(&records);
@@ -311,12 +344,13 @@ pub(super) fn get_daily_week_on(
         .collect();
     let today_index = day_indexes.get(&today_str).copied();
 
-    populate_week_projects(&mut days, &day_indexes, &ordered_records, &progress, &paths);
+    populate_range_projects(&mut days, &day_indexes, &ordered_records, &progress, &paths);
 
     let reminders = load_reminder_records(connection)?;
-    let overdue = bucket_reminders(&mut days, reminders, &today_str, &day_indexes);
+    let mut overdue = bucket_reminders(&mut days, reminders, &today_str, &day_indexes);
+    sort_overdue_reminders(&mut overdue);
     if let Some(index) = today_index {
-        days[index].overdue_reminders = overdue;
+        days[index].overdue_reminders = overdue.clone();
     }
 
     for day in &mut days {
@@ -327,6 +361,17 @@ pub(super) fn get_daily_week_on(
         sort_cross_day_completed_reminders(&mut day.cross_day_completed_reminders);
         apply_short_ids(&mut day.completed_projects, &mut day.progressed_projects);
     }
+
+    Ok((today_str, overdue, days))
+}
+
+pub(super) fn get_daily_week_on(
+    connection: &Connection,
+    week_start: &str,
+    today: NaiveDate,
+) -> Result<DailyWeekDto, ApiError> {
+    let dates = build_week_dates(week_start)?;
+    let (today_str, _overdue, days) = build_daily_days_on(connection, dates, today)?;
 
     Ok(DailyWeekDto {
         week_start: week_start.to_string(),
@@ -340,6 +385,32 @@ pub(crate) fn get_daily_week(
     week_start: &str,
 ) -> Result<DailyWeekDto, ApiError> {
     get_daily_week_on(connection, week_start, local_today())
+}
+
+pub(super) fn get_daily_range_on(
+    connection: &Connection,
+    start_date: &str,
+    end_date: &str,
+    today: NaiveDate,
+) -> Result<DailyRangeDto, ApiError> {
+    let dates = build_range_dates(start_date, end_date)?;
+    let (today_str, overdue_reminders, days) = build_daily_days_on(connection, dates, today)?;
+
+    Ok(DailyRangeDto {
+        start_date: start_date.to_string(),
+        end_date: end_date.to_string(),
+        today: today_str,
+        overdue_reminders,
+        days,
+    })
+}
+
+pub(crate) fn get_daily_range(
+    connection: &Connection,
+    start_date: &str,
+    end_date: &str,
+) -> Result<DailyRangeDto, ApiError> {
+    get_daily_range_on(connection, start_date, end_date, local_today())
 }
 
 pub(super) fn get_month_calendar_on(

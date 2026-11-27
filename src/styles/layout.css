@@ -4,7 +4,7 @@
   min-height: 100dvh;
 }
 
-.app-shell.view-monthly {
+.app-shell.view-calendar {
   height: 100dvh;
   max-height: 100dvh;
   overflow: hidden;
@@ -177,7 +177,7 @@
   padding: var(--page-pad-y) var(--page-pad-x) var(--space-8);
 }
 
-.app-shell.view-monthly .main-content {
+.app-shell.view-calendar .main-content {
   overflow: hidden;
   padding: 14px var(--page-pad-x) 14px;
 }
@@ -253,7 +253,7 @@
 }
 
 @media (max-height: 760px) {
-  .app-shell.view-monthly .main-content { padding-block: 10px; }
+  .app-shell.view-calendar .main-content { padding-block: 10px; }
 }
 
 @media (max-width: 760px) {
@@ -263,6 +263,6 @@
   .today-text { display: none; }
   .top-divider { display: none; }
   .main-content { padding: 14px 12px 28px; }
-  .app-shell.view-monthly .main-content { padding-inline: 12px; }
+  .app-shell.view-calendar .main-content { padding-inline: 12px; }
   .page-toolbar { gap: 8px 10px; }
 }

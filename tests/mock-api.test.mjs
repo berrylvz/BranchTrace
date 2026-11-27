@@ -162,6 +162,54 @@ test('daily week computes progressedSameDay, shortIds, overdue, and cross-day co
   assert.notEqual(todayCol.completedProjects[0].shortId, todayCol.progressedProjects[0].shortId)
 })
 
+test('daily range enforces 30-day limit, validates ordering, and always returns global overdue reminders', async () => {
+  const { api: baseApi } = await createMockApi()
+  const { today } = await baseApi.getClockContext()
+  const pastOverdue = shiftDate(today, -20)
+  const windowStart = shiftDate(today, -10)
+  const windowEnd = shiftDate(today, -5)
+
+  const { api } = await createMockApi({
+    reminders: [{
+      id: 'old-overdue',
+      title: 'Overdue outside window',
+      scheduledDate: pastOverdue,
+      status: 'active',
+      completedDate: null,
+      completedActionAt: null,
+      canceledDate: null,
+      sortOrder: 1024,
+      version: 0,
+    }],
+  })
+
+  const p = await api.createProject('Range project')
+  await api.setProjectProgress(p.id, windowStart, true, p.version)
+
+  const range = await api.getDailyRange(windowStart, windowEnd)
+  assert.equal(range.startDate, windowStart)
+  assert.equal(range.endDate, windowEnd)
+  assert.equal(range.days.length, 6)
+  assert.equal(range.days[0].progressedProjects.length, 1)
+  assert.deepEqual(range.overdueReminders.map((item) => item.reminder.id), ['old-overdue'])
+
+  // 30 inclusive days succeeds
+  const maxRange = await api.getDailyRange('2026-11-01', '2026-11-30')
+  assert.equal(maxRange.days.length, 30)
+
+  // 31 inclusive days fails with INVALID_DATE
+  await assert.rejects(
+    api.getDailyRange('2026-11-01', '2026-12-01'),
+    (error) => error.code === 'INVALID_DATE',
+  )
+
+  // Reversed range fails with INVALID_DATE
+  await assert.rejects(
+    api.getDailyRange('2026-11-20', '2026-11-19'),
+    (error) => error.code === 'INVALID_DATE',
+  )
+})
+
 test('month calendar returns full Mon-Sun grid, project counts, planned, cross-day completed, and overdue reminders', async () => {
   const { api } = await createMockApi()
   const { today } = await api.getClockContext()

@@ -7,8 +7,9 @@ use db::{clock_context, DbHandle};
 pub use db::{create_demo_database_file, DemoSeedSummary};
 pub use models::{ApiError, ErrorCode};
 use models::{
-    ClockContext, DailyWeekDto, DeleteResult, MonthCalendarDto, PreviewResult, ProjectDetailDto,
-    ProjectDto, ReminderDto, RestoreResult, TerminalStatus, ThemeSettings, TrashEntryDto,
+    ClockContext, DailyRangeDto, DailyWeekDto, DeleteResult, MonthCalendarDto, PreviewResult,
+    ProjectDetailDto, ProjectDto, ReminderDto, RestoreResult, TerminalStatus, ThemeSettings,
+    TrashEntryDto,
 };
 use rusqlite::Connection;
 use std::ffi::OsString;
@@ -344,6 +345,18 @@ async fn get_daily_week(
 }
 
 #[tauri::command]
+async fn get_daily_range(
+    state: tauri::State<'_, AppState>,
+    start_date: String,
+    end_date: String,
+) -> Result<DailyRangeDto, ApiError> {
+    call_db(&state, move |conn| {
+        db::views::get_daily_range(conn, &start_date, &end_date)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn get_month_calendar(
     state: tauri::State<'_, AppState>,
     month: String,
@@ -604,6 +617,7 @@ pub fn run() {
             update_reminder_completed_date,
             reorder_reminders,
             get_daily_week,
+            get_daily_range,
             get_month_calendar,
             preview_project_trash,
             trash_project,
