@@ -355,9 +355,12 @@
   font-size: var(--font-size-lg);
   font-weight: 600;
 }
+/* Completed rows already carry a check icon and a dated badge; strikethrough only on canceled. */
 .project-row.completed .project-title,
 .project-row.canceled .project-title {
   color: var(--color-text-secondary);
+}
+.project-row.canceled .project-title {
   text-decoration: line-through;
   text-decoration-color: var(--color-border-strong);
 }
